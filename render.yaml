@@ -32,3 +32,9 @@ services:
         value: "10"
       - key: ST_MULTIPLIER_1H
         value: "3.0"
+      - key: PORT
+        value: "10000"
+      - key: CHECK_INTERVAL_SECONDS
+        value: "300"
+      - key: UPDATE_4H_HOURS
+        value: "4"
