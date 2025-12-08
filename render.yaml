@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: contrarian-pullback-bot
+    env: python
+    region: frankfurt
+    plan: free
+    branch: main
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.7"
+      - key: BYBIT_API_KEY
+        sync: false
+      - key: BYBIT_API_SECRET
+        sync: false
+      - key: BYBIT_TESTNET
+        value: "false"
+      - key: SYMBOLS
+        value: "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT"
+      - key: POSITION_SIZE_USDT
+        value: "100"
+      - key: LEVERAGE
+        value: "20"
+      - key: EMA_PERIOD_4H
+        value: "200"
+      - key: ST_PERIOD_4H
+        value: "10"
+      - key: ST_MULTIPLIER_4H
+        value: "3.0"
+      - key: ST_PERIOD_1H
+        value: "10"
+      - key: ST_MULTIPLIER_1H
+        value: "3.0"

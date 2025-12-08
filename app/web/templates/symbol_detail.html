@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ symbol }} - Chart</title>
+    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --cyan: #06b6d4;
+            --bg: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            --bg-card: rgba(30, 41, 59, 0.6);
+            --bg-hover: rgba(51, 65, 85, 0.8);
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: rgba(148, 163, 184, 0.2);
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            background-attachment: fixed;
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        /* Navigation Bar */
+        .navbar {
+            background: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .back-btn {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .back-btn:hover {
+            color: var(--primary);
+        }
+        
+        /* Container */
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        /* Header */
+        .symbol-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+        }
+        
+        .symbol-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        
+        .symbol-name {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+        
+        .symbol-price {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--success);
+        }
+        
+        .symbol-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 12px;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+        
+        .badge-bullish {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+        
+        /* Timeframe Selector */
+        .timeframe-selector {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .timeframe-btn {
+            padding: 0.5rem 1rem;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+        
+        .timeframe-btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-hover);
+        }
+        
+        .timeframe-btn.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+        
+        /* Chart Container */
+        .chart-wrapper {
+            background: var(--bg-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 600px;
+            width: 100%;
+        }
+        
+        /* Position Info */
+        .position-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1.5rem;
+        }
+        
+        .info-card {
+            background: rgba(255, 255, 255, 0.03);
+            padding: 1rem;
+            border-radius: 12px;
+            border-left: 3px solid var(--primary);
+        }
+        
+        .info-label {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            margin-bottom: 0.5rem;
+        }
+        
+        .info-value {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        
+        .info-value.positive {
+            color: var(--success);
+        }
+        
+        .info-value.negative {
+            color: var(--danger);
+        }
+        
+        /* Legend */
+        .chart-legend {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 3px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">🎯 Contrarian Bot</a>
+        <a href="/" class="back-btn">
+            ← Back to Dashboard
+        </a>
+    </nav>
+
+    <div class="container">
+        <!-- Symbol Header -->
+        <div class="symbol-header">
+            <div class="symbol-info">
+                <div class="symbol-name" id="symbol-name">{{ symbol }}</div>
+                <div class="symbol-price" id="symbol-price">Loading...</div>
+            </div>
+            <div>
+                <span class="symbol-badge" id="symbol-badge">LOADING...</span>
+            </div>
+        </div>
+
+        <!-- Timeframe Selector -->
+        <div class="timeframe-selector">
+            <button class="timeframe-btn active" onclick="switchTimeframe('4h')">4H</button>
+            <button class="timeframe-btn" onclick="switchTimeframe('1h')">1H</button>
+        </div>
+
+        <!-- Chart Container -->
+        <div class="chart-wrapper">
+            <div class="chart-container" id="chartContainer"></div>
+            
+            <!-- Chart Legend -->
+            <div class="chart-legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #f59e0b;"></div>
+                    <span>EMA 200</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #10b981;"></div>
+                    <span>SuperTrend 4H (Bullish)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #ef4444;"></div>
+                    <span>SuperTrend 1H (Bearish)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #6366f1; border: 2px dashed #6366f1;"></div>
+                    <span>Entry Price (LONG)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #10b981; border: 2px dotted #10b981;"></div>
+                    <span>Partial TP Target</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #06b6d4; border: 2px dashed #06b6d4;"></div>
+                    <span>Current Price</span>
+                </div>
+                <div class="legend-item">
+                    <span style="font-size: 1.2rem;">📍</span>
+                    <span>Entry Point</span>
+                </div>
+                <div class="legend-item">
+                    <span style="font-size: 1.2rem;">✅</span>
+                    <span>Partial TP Executed</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Position Info -->
+        <div class="position-info" id="position-info" style="display: none;">
+            <div class="info-card">
+                <div class="info-label">Position</div>
+                <div class="info-value" id="position-side">-</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Entry Price</div>
+                <div class="info-value" id="entry-price">-</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Current Price</div>
+                <div class="info-value" id="current-price">-</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Unrealized PnL</div>
+                <div class="info-value" id="unrealized-pnl">-</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Size</div>
+                <div class="info-value" id="position-size">-</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Partial TP Status</div>
+                <div class="info-value" id="partial-tp-status">-</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Remaining Size</div>
+                <div class="info-value" id="remaining-size">-</div>
+            </div>
+        </div>
+        
+        <div id="no-position" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+            No open position for this symbol
+        </div>
+    </div>
+
+    <script>
+        const symbol = '{{ symbol }}';
+        console.log('Symbol:', symbol);
+        
+        // Check if symbol is valid
+        if (!symbol || symbol === '') {
+            console.error('Invalid symbol!');
+            document.getElementById('symbol-price').textContent = 'Error: Invalid symbol';
+        }
+        
+        let chart;
+        let candlestickSeries;
+        let emaSeries;
+        let st4hSeries;
+        let st1hSeries;
+        let entryPriceSeries;
+        let partialTPSeries;
+        let currentPriceSeries;
+        let currentTimeframe = '4h';
+        let chartData = null;
+        let isFirstLoad = true;
+        let userHasZoomed = false;
+
+        // Load chart data from API
+        async function loadChartData() {
+            try {
+                console.log('Loading chart data for', symbol);
+                // Show loading state
+                const priceEl = document.getElementById('symbol-price');
+                if (priceEl) {
+                    priceEl.textContent = 'Loading...';
+                }
+                
+                const response = await fetch(`/api/symbol/${symbol}/chart-data`);
+                console.log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                console.log('Chart data received:', {
+                    hasCandles4h: !!data.candles_4h && data.candles_4h.length > 0,
+                    hasCandles1h: !!data.candles_1h && data.candles_1h.length > 0,
+                    hasIndicators: !!data.indicators,
+                    currentPrice: data.current_price
+                });
+                
+                if (data.error) {
+                    console.error('Error loading chart data:', data.error);
+                    if (priceEl) {
+                        priceEl.textContent = `Error: ${data.error}`;
+                    }
+                    const badgeEl = document.getElementById('symbol-badge');
+                    if (badgeEl) {
+                        badgeEl.textContent = 'ERROR';
+                    }
+                    return;
+                }
+                
+                // CRITICAL: Set chartData FIRST, before any UI updates
+                chartData = data;
+                console.log('chartData set, has position:', !!chartData.position);
+                
+                // CRITICAL: Set candlesticks FIRST, before any UI updates
+                console.log('=== SETTING CANDLESTICKS IMMEDIATELY ===');
+                try {
+                    const candles = currentTimeframe === '4h' ? data.candles_4h : data.candles_1h;
+                    if (candles && candles.length > 0 && candlestickSeries) {
+                        const candlestickData = convertCandles(candles);
+                        if (candlestickData.length > 0) {
+                            candlestickData.sort((a, b) => a.time - b.time);
+                            candlestickSeries.setData(candlestickData);
+                            console.log('✅ Candlesticks set immediately, count:', candlestickData.length);
+                        } else {
+                            console.warn('No candlestick data after conversion');
+                        }
+                    } else {
+                        console.warn('Cannot set candlesticks immediately - candles:', !!candles, 'count:', candles ? candles.length : 0, 'series:', !!candlestickSeries);
+                    }
+                } catch (error) {
+                    console.error('❌ Error setting candlesticks immediately:', error);
+                }
+                
+                // Update header - get current price
+                let currentPrice = data.current_price || 0;
+                if (currentPrice <= 0) {
+                    // Try to get price from candles if available
+                    const candles = data.candles_4h || data.candles_1h || [];
+                    if (candles.length > 0) {
+                        const lastCandle = candles[candles.length - 1];
+                        currentPrice = parseFloat(lastCandle[4]); // close price
+                    }
+                }
+                
+                // Update price display
+                if (currentPrice > 0) {
+                    document.getElementById('symbol-price').textContent = `$${currentPrice.toFixed(2)}`;
+                } else {
+                    document.getElementById('symbol-price').textContent = 'N/A';
+                }
+                
+                // Determine badge
+                let badge = 'NEUTRAL';
+                let badgeClass = 'badge-neutral';
+                if (data.indicators && data.indicators.ema200_4h && data.indicators.st_4h_direction && currentPrice > 0) {
+                    // Simplified: check if EMA and ST agree
+                    const emaBullish = data.indicators.ema200_4h < currentPrice;
+                    const stBullish = data.indicators.st_4h_direction === 'green';
+                    if (emaBullish && stBullish) {
+                        badge = 'BULLISH';
+                        badgeClass = 'badge-bullish';
+                    } else if (!emaBullish && !stBullish) {
+                        badge = 'BEARISH';
+                        badgeClass = 'badge-bearish';
+                    }
+                }
+                const badgeEl = document.getElementById('symbol-badge');
+                badgeEl.textContent = badge;
+                badgeEl.className = `symbol-badge ${badgeClass}`;
+                
+                // Update position info - wrap in try-catch to prevent errors
+                try {
+                    if (data.position) {
+                        console.log('Updating position info UI with:', data.position);
+                        document.getElementById('position-info').style.display = 'grid';
+                        document.getElementById('no-position').style.display = 'none';
+                        
+                        document.getElementById('position-side').textContent = data.position.side;
+                        document.getElementById('entry-price').textContent = `$${data.position.entry_price.toFixed(2)}`;
+                        document.getElementById('current-price').textContent = `$${data.position.current_price.toFixed(2)}`;
+                        
+                        const pnlEl = document.getElementById('unrealized-pnl');
+                        const pnlSign = data.position.unrealized_pnl >= 0 ? '+' : '';
+                        pnlEl.textContent = `${pnlSign}$${data.position.unrealized_pnl.toFixed(2)} (${pnlSign}${data.position.pnl_percent.toFixed(2)}%)`;
+                        pnlEl.className = `info-value ${data.position.unrealized_pnl >= 0 ? 'positive' : 'negative'}`;
+                        
+                        document.getElementById('position-size').textContent = `${data.position.position_size} ${symbol.replace('USDT', '')}`;
+                        
+                        const tpStatusEl = document.getElementById('partial-tp-status');
+                        if (data.position.partial_tp_done) {
+                            tpStatusEl.textContent = '✅ Executed (50%)';
+                            tpStatusEl.className = 'info-value positive';
+                        } else {
+                            tpStatusEl.textContent = '⏳ Pending';
+                            tpStatusEl.className = 'info-value';
+                        }
+                        
+                        const remainingSize = data.position.position_size * (data.position.partial_tp_done ? 0.5 : 1);
+                        document.getElementById('remaining-size').textContent = `${remainingSize.toFixed(8)} ${symbol.replace('USDT', '')}`;
+                    } else {
+                        console.log('No position data - hiding position info');
+                        document.getElementById('position-info').style.display = 'none';
+                        document.getElementById('no-position').style.display = 'block';
+                    }
+                } catch (error) {
+                    console.error('Error updating position info UI:', error);
+                    // Continue anyway - don't stop execution
+                }
+                
+                // Load chart with data - CRITICAL: Always call loadData
+                console.log('=== About to call loadData ===');
+                console.log('Current timeframe:', currentTimeframe);
+                console.log('ChartData keys:', Object.keys(chartData));
+                console.log('Has position:', !!chartData.position);
+                console.log('Has candles_4h:', !!chartData.candles_4h && chartData.candles_4h.length > 0);
+                console.log('Has candles_1h:', !!chartData.candles_1h && chartData.candles_1h.length > 0);
+                console.log('candlestickSeries exists:', typeof candlestickSeries !== 'undefined' && candlestickSeries !== null);
+                
+                // CRITICAL: Ensure chart is ready before calling loadData
+                if (typeof candlestickSeries === 'undefined' || candlestickSeries === null) {
+                    console.error('❌ candlestickSeries not ready! Waiting...');
+                    setTimeout(() => {
+                        console.log('Retrying loadData after candlestickSeries ready...');
+                        loadData(currentTimeframe);
+                    }, 200);
+                } else {
+                    // Call loadData immediately if chart is ready
+                    try {
+                        console.log('Calling loadData immediately...');
+                        loadData(currentTimeframe);
+                        console.log('✅ loadData call completed');
+                    } catch (error) {
+                        console.error('❌ CRITICAL ERROR in loadData:', error);
+                        console.error('Error stack:', error.stack);
+                        // Emergency fallback: try to set candlesticks directly
+                        try {
+                            const candles = currentTimeframe === '4h' ? chartData.candles_4h : chartData.candles_1h;
+                            if (candles && candles.length > 0) {
+                                const emergencyData = convertCandles(candles);
+                                if (emergencyData.length > 0) {
+                                    emergencyData.sort((a, b) => a.time - b.time);
+                                    candlestickSeries.setData(emergencyData);
+                                    console.log('✅ Emergency candlestick data set');
+                                }
+                            }
+                        } catch (emergencyError) {
+                            console.error('❌ Even emergency fallback failed:', emergencyError);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading chart data:', error);
+                console.error('Error stack:', error.stack);
+                const priceEl = document.getElementById('symbol-price');
+                if (priceEl) {
+                    priceEl.textContent = 'Error loading: ' + error.message;
+                }
+                const badgeEl = document.getElementById('symbol-badge');
+                if (badgeEl) {
+                    badgeEl.textContent = 'ERROR';
+                }
+            }
+        }
+
+        // Convert candles from API format to chart format
+        function convertCandles(candles) {
+            if (!candles || candles.length === 0) {
+                console.warn('convertCandles: No candles provided');
+                return [];
+            }
+            
+            console.log('Converting candles, count:', candles.length);
+            const converted = candles.map((c, index) => {
+                // API format: [timestamp, open, high, low, close, volume, turnover]
+                if (Array.isArray(c) && c.length >= 5) {
+                    const time = Math.floor(parseInt(c[0]) / 1000); // Convert ms to seconds
+                    const open = parseFloat(c[1]);
+                    const high = parseFloat(c[2]);
+                    const low = parseFloat(c[3]);
+                    const close = parseFloat(c[4]);
+                    
+                    // Validate data
+                    if (isNaN(time) || isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
+                        console.warn(`Invalid candle data at index ${index}:`, c);
+                        return null;
+                    }
+                    
+                    return { time, open, high, low, close };
+                } else {
+                    console.warn(`Invalid candle format at index ${index}:`, c);
+                    return null;
+                }
+            }).filter(c => c !== null);
+            
+            console.log('Converted candles count:', converted.length);
+            if (converted.length > 0) {
+                console.log('First candle:', converted[0]);
+                console.log('Last candle:', converted[converted.length - 1]);
+            }
+            
+            return converted;
+        }
+
+        // Calculate EMA from candles
+        function calculateEMA(candles, period) {
+            if (!candles || candles.length < period) return [];
+            
+            const ema = [];
+            const multiplier = 2 / (period + 1);
+            
+            for (let i = 0; i < candles.length; i++) {
+                const close = candles[i].close;
+                if (i === 0) {
+                    ema.push({ time: candles[i].time, value: close });
+                } else {
+                    const value = (close - ema[i - 1].value) * multiplier + ema[i - 1].value;
+                    ema.push({ time: candles[i].time, value: value });
+                }
+            }
+            
+            return ema;
+        }
+
+        function initChart() {
+            console.log('Initializing chart...');
+            const container = document.getElementById('chartContainer');
+            if (!container) {
+                console.error('Chart container not found!');
+                return;
+            }
+            
+            // Check if LightweightCharts is available
+            if (typeof LightweightCharts === 'undefined') {
+                console.error('LightweightCharts library not loaded!');
+                document.getElementById('symbol-price').textContent = 'Error: Chart library not loaded';
+                return;
+            }
+            
+            console.log('Chart container found, creating chart...');
+            console.log('LightweightCharts type:', typeof LightweightCharts);
+            console.log('LightweightCharts methods:', Object.keys(LightweightCharts || {}));
+            
+            try {
+                // Check if createChart exists
+                if (!LightweightCharts || typeof LightweightCharts.createChart !== 'function') {
+                    throw new Error('LightweightCharts.createChart is not a function. Library may not be loaded correctly.');
+                }
+                
+                chart = LightweightCharts.createChart(container, {
+                    layout: {
+                        background: { color: 'transparent' },
+                        textColor: '#94a3b8',
+                    },
+                    grid: {
+                        vertLines: { color: '#334155' },
+                        horzLines: { color: '#334155' },
+                    },
+                    crosshair: {
+                        mode: LightweightCharts.CrosshairMode.Normal,
+                    },
+                    rightPriceScale: {
+                        borderColor: '#334155',
+                    },
+                    timeScale: {
+                        borderColor: '#334155',
+                        timeVisible: true,
+                    },
+                });
+                
+                console.log('Chart created:', chart);
+                console.log('Chart methods:', Object.keys(chart || {}));
+
+                // Candlestick series - check if method exists
+                if (typeof chart.addCandlestickSeries !== 'function') {
+                    console.error('chart.addCandlestickSeries is not a function');
+                    console.log('Available methods:', Object.keys(chart));
+                    throw new Error('chart.addCandlestickSeries is not a function');
+                }
+                
+                candlestickSeries = chart.addCandlestickSeries({
+                    upColor: '#10b981',
+                    downColor: '#ef4444',
+                    borderVisible: false,
+                    wickUpColor: '#10b981',
+                    wickDownColor: '#ef4444',
+                });
+
+                // EMA 200
+                emaSeries = chart.addLineSeries({
+                    color: '#f59e0b',
+                    lineWidth: 2,
+                    title: 'EMA 200',
+                });
+
+                // SuperTrend 4H
+                st4hSeries = chart.addLineSeries({
+                    color: '#10b981',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    title: 'SuperTrend 4H',
+                });
+
+                // SuperTrend 1H
+                st1hSeries = chart.addLineSeries({
+                    color: '#ef4444',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    title: 'SuperTrend 1H',
+                });
+
+                // Entry price line
+                entryPriceSeries = chart.addLineSeries({
+                    color: '#6366f1',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    title: 'Entry Price',
+                });
+
+                // Partial TP price line
+                partialTPSeries = chart.addLineSeries({
+                    color: '#10b981',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dotted,
+                    title: 'Partial TP Target',
+                });
+
+                // Current price line
+                currentPriceSeries = chart.addLineSeries({
+                    color: '#06b6d4',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    title: 'Current Price',
+                });
+                
+                console.log('All series created successfully');
+
+                // Load data after chart is initialized
+                console.log('Chart initialized, loading data...');
+                loadChartData();
+            } catch (error) {
+                console.error('Error initializing chart:', error);
+                document.getElementById('symbol-price').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        function loadData(timeframe) {
+            console.log('=== loadData START ===');
+            console.log('Timeframe:', timeframe, 'chartData:', !!chartData);
+            
+            if (!chartData) {
+                console.warn('No chartData available');
+                return;
+            }
+            
+            // Get candles for selected timeframe
+            const candles = timeframe === '4h' ? chartData.candles_4h : chartData.candles_1h;
+            console.log('Candles for timeframe:', timeframe, 'count:', candles ? candles.length : 0);
+            
+            if (!candles || candles.length === 0) {
+                console.error('No candles available for timeframe:', timeframe);
+                return;
+            }
+            
+            // Convert and validate candles FIRST
+            let candlestickData = [];
+            try {
+                candlestickData = convertCandles(candles);
+                console.log('Converted candlestick data count:', candlestickData.length);
+                
+                if (candlestickData.length === 0) {
+                    console.error('No candles data available after conversion');
+                    return;
+                }
+                
+                // Sort by time (ascending) - LightweightCharts requires chronological order
+                candlestickData.sort((a, b) => a.time - b.time);
+                console.log('Candles sorted, first time:', candlestickData[0].time, 'last time:', candlestickData[candlestickData.length - 1].time);
+            } catch (error) {
+                console.error('Error converting/sorting candles:', error);
+                return;
+            }
+            
+            const firstCandle = candlestickData[0];
+            const lastCandle = candlestickData[candlestickData.length - 1];
+            
+            if (!firstCandle || !lastCandle) {
+                console.error('Invalid candle data structure!');
+                return;
+            }
+            
+            // SET CANDLESTICKS FIRST - BEFORE ANY POSITION PROCESSING
+            console.log('=== SETTING CANDLESTICKS FIRST ===');
+            try {
+                candlestickSeries.setData(candlestickData);
+                console.log('✅ Candlestick data set successfully, count:', candlestickData.length);
+            } catch (error) {
+                console.error('❌ CRITICAL: Error setting candlestick data:', error);
+                return; // Stop if candlesticks fail
+            }
+            
+            // Use EMA 200 from backend (don't recalculate - use official value)
+            let emaData = [];
+            try {
+                if (timeframe === '4h' && chartData.indicators && chartData.indicators.ema200_4h) {
+                    // Use the official EMA value from backend, create a horizontal line
+                    const emaValue = parseFloat(chartData.indicators.ema200_4h);
+                    if (!isNaN(emaValue) && emaValue > 0) {
+                        emaData = [
+                            { time: firstCandle.time, value: emaValue },
+                            { time: lastCandle.time, value: emaValue }
+                        ];
+                        console.log('EMA 200 data created from backend value:', emaValue);
+                    } else {
+                        console.warn('Invalid EMA 200 value from backend:', chartData.indicators.ema200_4h);
+                    }
+                }
+            } catch (error) {
+                console.error('Error creating EMA data:', error);
+                emaData = [];
+            }
+            
+            // Get SuperTrend data
+            let st4hData = [];
+            let st1hData = [];
+            
+            try {
+                if (timeframe === '4h' && chartData.indicators && chartData.indicators.st_4h_value) {
+                    // Create SuperTrend line from last value (simplified - horizontal line)
+                    st4hData = [
+                        { time: firstCandle.time, value: chartData.indicators.st_4h_value },
+                        { time: lastCandle.time, value: chartData.indicators.st_4h_value }
+                    ];
+                    console.log('ST 4H data created');
+                }
+            } catch (error) {
+                console.error('Error creating ST 4H data:', error);
+            }
+            
+            try {
+                if (chartData.indicators && chartData.indicators.st_1h_value) {
+                    st1hData = [
+                        { time: firstCandle.time, value: chartData.indicators.st_1h_value },
+                        { time: lastCandle.time, value: chartData.indicators.st_1h_value }
+                    ];
+                    console.log('ST 1H data created');
+                }
+            } catch (error) {
+                console.error('Error creating ST 1H data:', error);
+            }
+
+            // Entry price line (if position exists) - wrap in try-catch
+            let entryPriceData = [];
+            let entryTime = null;
+            try {
+                if (chartData.position && chartData.position.entry_price && !isNaN(chartData.position.entry_price)) {
+                    console.log('Position found:', chartData.position);
+                    
+                    // Parse entry_time - handle both ISO string and timestamp
+                    if (chartData.position.entry_time) {
+                        try {
+                            const entryDate = new Date(chartData.position.entry_time);
+                            if (isNaN(entryDate.getTime())) {
+                                throw new Error('Invalid date');
+                            }
+                            entryTime = Math.floor(entryDate.getTime() / 1000);
+                            console.log('Entry time parsed:', entryTime, 'from:', chartData.position.entry_time);
+                            
+                            // Ensure entryTime is within candle range
+                            if (entryTime < firstCandle.time) {
+                                entryTime = firstCandle.time;
+                            } else if (entryTime > lastCandle.time) {
+                                entryTime = lastCandle.time;
+                            }
+                        } catch (e) {
+                            console.warn('Error parsing entry_time:', e);
+                            // Use first candle time as fallback
+                            entryTime = firstCandle.time;
+                        }
+                    } else {
+                        // Use first candle time if entry_time is not available
+                        entryTime = firstCandle.time;
+                    }
+                    
+                    // Validate entry_price is a valid number
+                    const entryPrice = parseFloat(chartData.position.entry_price);
+                    if (!isNaN(entryPrice) && entryPrice > 0 && entryTime && candlestickData.length > 0) {
+                        entryPriceData = [
+                            { time: entryTime, value: entryPrice },
+                            { time: lastCandle.time, value: entryPrice }
+                        ];
+                        console.log('Entry price line data:', entryPriceData);
+                    } else {
+                        console.warn('Cannot create entry price line - invalid entryPrice or entryTime');
+                    }
+                } else {
+                    console.log('No position data available');
+                }
+            } catch (error) {
+                console.error('Error processing position data:', error);
+                entryPriceData = [];
+            }
+
+            // Partial TP target price line - wrap in try-catch
+            let partialTPData = [];
+            try {
+                if (chartData.position && chartData.position.tp_target_price && !isNaN(chartData.position.tp_target_price) && candlestickData.length > 0) {
+                    const tpPrice = parseFloat(chartData.position.tp_target_price);
+                    if (!isNaN(tpPrice) && tpPrice > 0) {
+                        const startTime = entryTime || firstCandle.time;
+                        partialTPData = [
+                            { time: startTime, value: tpPrice },
+                            { time: lastCandle.time, value: tpPrice }
+                        ];
+                        console.log('Partial TP line data:', partialTPData);
+                    } else {
+                        console.warn('Invalid TP target price:', chartData.position.tp_target_price);
+                    }
+                }
+            } catch (error) {
+                console.error('Error processing TP data:', error);
+                partialTPData = [];
+            }
+
+            // Current price line - validate value
+            let currentPrice = parseFloat(chartData.current_price) || 0;
+            if (currentPrice <= 0 || isNaN(currentPrice)) {
+                // Use last candle close price if current_price is not available
+                currentPrice = lastCandle.close;
+            }
+            const currentPriceData = (currentPrice > 0 && !isNaN(currentPrice)) ? [
+                { time: firstCandle.time, value: currentPrice },
+                { time: lastCandle.time, value: currentPrice }
+            ] : [];
+            console.log('Current price line data:', currentPriceData);
+
+            // Then set indicators (candlesticks already set above)
+            try {
+                if (timeframe === '4h' && emaData.length > 0) {
+                    console.log('Setting EMA data, count:', emaData.length);
+                    emaSeries.setData(emaData);
+                } else {
+                    emaSeries.setData([]);
+                }
+            } catch (error) {
+                console.error('Error setting EMA data:', error);
+            }
+            
+            try {
+                if (timeframe === '4h' && st4hData.length > 0) {
+                    console.log('Setting ST 4H data, count:', st4hData.length);
+                    st4hSeries.setData(st4hData);
+                } else {
+                    st4hSeries.setData([]);
+                }
+            } catch (error) {
+                console.error('Error setting ST 4H data:', error);
+            }
+            
+            try {
+                if (st1hData.length > 0) {
+                    console.log('Setting ST 1H data, count:', st1hData.length);
+                    st1hSeries.setData(st1hData);
+                } else {
+                    st1hSeries.setData([]);
+                }
+            } catch (error) {
+                console.error('Error setting ST 1H data:', error);
+            }
+            
+            // Update series with data - wrap in try-catch to prevent errors from stopping execution
+            // Validate all data before setting
+            try {
+                console.log('Setting entry price series data:', entryPriceData.length, 'points');
+                if (entryPriceData.length > 0) {
+                    // Validate all values are valid numbers
+                    const validEntryData = entryPriceData.filter(d => 
+                        d && typeof d.time === 'number' && !isNaN(d.time) && 
+                        typeof d.value === 'number' && !isNaN(d.value) && d.value > 0
+                    );
+                    if (validEntryData.length > 0) {
+                        entryPriceSeries.setData(validEntryData);
+                    } else {
+                        entryPriceSeries.setData([]);
+                    }
+                } else {
+                    entryPriceSeries.setData([]);
+                }
+            } catch (error) {
+                console.error('Error setting entry price series:', error);
+                entryPriceSeries.setData([]);
+            }
+            
+            try {
+                console.log('Setting partial TP series data:', partialTPData.length, 'points');
+                if (partialTPData.length > 0) {
+                    // Validate all values are valid numbers
+                    const validTPData = partialTPData.filter(d => 
+                        d && typeof d.time === 'number' && !isNaN(d.time) && 
+                        typeof d.value === 'number' && !isNaN(d.value) && d.value > 0
+                    );
+                    if (validTPData.length > 0) {
+                        partialTPSeries.setData(validTPData);
+                    } else {
+                        partialTPSeries.setData([]);
+                    }
+                } else {
+                    partialTPSeries.setData([]);
+                }
+            } catch (error) {
+                console.error('Error setting partial TP series:', error);
+                partialTPSeries.setData([]);
+            }
+            
+            try {
+                console.log('Setting current price series data:', currentPriceData.length, 'points');
+                if (currentPriceData.length > 0) {
+                    // Validate all values are valid numbers
+                    const validCurrentData = currentPriceData.filter(d => 
+                        d && typeof d.time === 'number' && !isNaN(d.time) && 
+                        typeof d.value === 'number' && !isNaN(d.value) && d.value > 0
+                    );
+                    if (validCurrentData.length > 0) {
+                        currentPriceSeries.setData(validCurrentData);
+                    } else {
+                        currentPriceSeries.setData([]);
+                    }
+                } else {
+                    currentPriceSeries.setData([]);
+                }
+            } catch (error) {
+                console.error('Error setting current price series:', error);
+                currentPriceSeries.setData([]);
+            }
+
+            // Add markers for entry and partial TP - wrap in try-catch
+            const markers = [];
+            try {
+                if (entryTime && chartData.position && candlestickData.length > 0) {
+                    const lastCandle = candlestickData[candlestickData.length - 1];
+                    console.log('Adding entry marker at time:', entryTime, 'for side:', chartData.position.side);
+                    markers.push({
+                        time: entryTime,
+                        position: chartData.position.side === 'LONG' ? 'belowBar' : 'aboveBar',
+                        color: '#6366f1',
+                        shape: chartData.position.side === 'LONG' ? 'arrowUp' : 'arrowDown',
+                        text: `ENTRY ${chartData.position.side}`,
+                        size: 1.5,
+                    });
+                    
+                    if (chartData.position.partial_tp_done) {
+                        console.log('Adding partial TP marker');
+                        // Mark partial TP execution (simplified - use last candle time)
+                        markers.push({
+                            time: lastCandle.time,
+                            position: chartData.position.side === 'LONG' ? 'aboveBar' : 'belowBar',
+                            color: '#10b981',
+                            shape: chartData.position.side === 'LONG' ? 'arrowDown' : 'arrowUp',
+                            text: 'PARTIAL TP ✅',
+                            size: 1.5,
+                        });
+                    }
+                } else {
+                    console.log('No markers to add - entryTime:', entryTime, 'position:', !!chartData.position, 'candles:', candlestickData.length);
+                }
+            } catch (error) {
+                console.error('Error creating markers:', error);
+            }
+            
+            try {
+                console.log('Setting markers:', markers.length);
+                candlestickSeries.setMarkers(markers);
+            } catch (error) {
+                console.error('Error setting markers:', error);
+            }
+            
+            // Save viewport before updating (if user has zoomed)
+            let savedVisibleRange = null;
+            if (userHasZoomed && chart && chart.timeScale) {
+                try {
+                    savedVisibleRange = chart.timeScale().getVisibleRange();
+                    console.log('Saved visible range:', savedVisibleRange);
+                } catch (e) {
+                    console.warn('Could not save visible range:', e);
+                }
+            }
+            
+            // Only fit content on first load or when switching timeframes
+            try {
+                if (isFirstLoad) {
+                    chart.timeScale().fitContent();
+                    isFirstLoad = false;
+                    console.log('=== loadData END (first load, fitContent) ===');
+                } else if (savedVisibleRange) {
+                    // Restore saved viewport
+                    chart.timeScale().setVisibleRange(savedVisibleRange);
+                    console.log('=== loadData END (restored viewport) ===');
+                } else {
+                    console.log('=== loadData END (no viewport change) ===');
+                }
+            } catch (error) {
+                console.error('Error managing viewport:', error);
+            }
+            
+            // Track user interactions (zoom/pan)
+            if (chart && chart.timeScale) {
+                chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+                    if (!isFirstLoad) {
+                        userHasZoomed = true;
+                    }
+                });
+            }
+        }
+
+        function switchTimeframe(timeframe) {
+            currentTimeframe = timeframe;
+            isFirstLoad = true; // Reset on timeframe switch to fit content
+            userHasZoomed = false; // Reset zoom tracking
+            
+            // Update button states
+            document.querySelectorAll('.timeframe-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            loadData(timeframe);
+        }
+
+        // Initialize chart on load
+        function startApp() {
+            console.log('Starting app...');
+            console.log('LightweightCharts available:', typeof LightweightCharts !== 'undefined');
+            
+            // Wait for LightweightCharts to be fully loaded
+            if (typeof LightweightCharts === 'undefined') {
+                console.warn('LightweightCharts not loaded yet, waiting...');
+                setTimeout(startApp, 100);
+                return;
+            }
+            
+            try {
+                initChart();
+                // Refresh data every 30 seconds
+                setInterval(loadChartData, 30000);
+            } catch (error) {
+                console.error('Error starting app:', error);
+            }
+        }
+        
+        // Wait for DOM and LightweightCharts to be ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                setTimeout(startApp, 200); // Wait for scripts to load
+            });
+        } else {
+            // DOM already loaded, wait for LightweightCharts
+            setTimeout(startApp, 200);
+        }
+    </script>
+</body>
+</html>
+

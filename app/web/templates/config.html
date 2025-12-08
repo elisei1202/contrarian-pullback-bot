@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuration - Contrarian Pullback Bot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --danger: #ef4444;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --bg-hover: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        
+        .navbar {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .navbar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+            text-decoration: none;
+        }
+        
+        .navbar-nav {
+            display: flex;
+            gap: 1.5rem;
+            list-style: none;
+        }
+        
+        .nav-link {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            color: var(--primary);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .card-header {
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .card-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .card-subtitle {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+        
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .config-item {
+            margin-bottom: 1.5rem;
+        }
+        
+        .config-item label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: var(--text);
+        }
+        
+        .config-item input,
+        .config-item select {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 0.875rem;
+        }
+        
+        .config-item input:disabled,
+        .config-item select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .config-item .help-text {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+        
+        .info-box {
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid var(--primary);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .info-box p {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .info-box strong {
+            color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">🎯 Contrarian Bot</a>
+        <ul class="navbar-nav">
+            <li><a href="/" class="nav-link">Dashboard</a></li>
+            <li><a href="/positions" class="nav-link">Positions</a></li>
+            <li><a href="/config" class="nav-link active">Config</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <div class="card">
+            <div class="card-header">
+                <h1 class="card-title">Configuration</h1>
+                <p class="card-subtitle">Bot settings and parameters</p>
+            </div>
+            
+            <div class="config-grid">
+                <div class="config-item">
+                    <label>Trading Symbols</label>
+                    <input type="text" id="symbols" disabled>
+                    <div class="help-text">Comma-separated list of trading pairs</div>
+                </div>
+                
+                <div class="config-item">
+                    <label>Position Size (USDT)</label>
+                    <input type="number" id="position-size" disabled>
+                    <div class="help-text">Size per trade in USDT</div>
+                </div>
+                
+                <div class="config-item">
+                    <label>Leverage</label>
+                    <input type="number" id="leverage" disabled>
+                    <div class="help-text">Leverage multiplier (1-100)</div>
+                </div>
+                
+                <div class="config-item">
+                    <label>Margin Mode</label>
+                    <select id="margin-mode" disabled>
+                        <option>ISOLATED</option>
+                        <option>CROSS</option>
+                    </select>
+                    <div class="help-text">Margin mode for positions</div>
+                </div>
+                
+                <div class="config-item">
+                    <label>EMA Period (4H)</label>
+                    <input type="number" id="ema-period" disabled>
+                    <div class="help-text">EMA period for 4H trend filter</div>
+                </div>
+                
+                <div class="config-item">
+                    <label>SuperTrend Period (4H)</label>
+                    <input type="number" id="st-period-4h" disabled>
+                    <div class="help-text">SuperTrend ATR period for 4H</div>
+                </div>
+                
+                <div class="config-item">
+                    <label>SuperTrend Multiplier (4H)</label>
+                    <input type="number" step="0.1" id="st-multiplier-4h" disabled>
+                    <div class="help-text">SuperTrend multiplier for 4H</div>
+                </div>
+                
+                <div class="config-item">
+                    <label>SuperTrend Period (1H)</label>
+                    <input type="number" id="st-period-1h" disabled>
+                    <div class="help-text">SuperTrend ATR period for 1H</div>
+                </div>
+                
+                <div class="config-item">
+                    <label>SuperTrend Multiplier (1H)</label>
+                    <input type="number" step="0.1" id="st-multiplier-1h" disabled>
+                    <div class="help-text">SuperTrend multiplier for 1H</div>
+                </div>
+            </div>
+            
+            <div class="info-box">
+                <p><strong>Note:</strong> Configuration is managed via environment variables.</p>
+                <p>To change settings, edit the <code>.env</code> file and restart the bot.</p>
+                <p>Current configuration is read-only for safety.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                if (data.config) {
+                    document.getElementById('symbols').value = data.config.symbols.join(', ');
+                    document.getElementById('position-size').value = data.config.position_size_usdt;
+                    document.getElementById('leverage').value = data.config.leverage;
+                    document.getElementById('margin-mode').value = data.config.margin_mode;
+                }
+            } catch (error) {
+                console.error('Error loading config:', error);
+            }
+        }
+
+        loadConfig();
+    </script>
+</body>
+</html>

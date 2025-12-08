@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Positions - Contrarian Pullback Bot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --bg-hover: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        
+        .navbar {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .navbar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+            text-decoration: none;
+        }
+        
+        .navbar-nav {
+            display: flex;
+            gap: 1.5rem;
+            list-style: none;
+        }
+        
+        .nav-link {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            color: var(--primary);
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        
+        .positions-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .positions-table th {
+            text-align: left;
+            padding: 1rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.875rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .positions-table td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .positions-table tr:hover {
+            background: var(--bg-hover);
+        }
+        
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .badge-long { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .badge-short { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        .badge-bullish { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .badge-bearish { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        .badge-neutral { background: rgba(107, 114, 128, 0.2); color: var(--text-muted); }
+        
+        .pnl {
+            font-weight: 700;
+        }
+        
+        .pnl.positive { color: var(--success); }
+        .pnl.negative { color: var(--danger); }
+        
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">🎯 Contrarian Bot</a>
+        <ul class="navbar-nav">
+            <li><a href="/" class="nav-link">Dashboard</a></li>
+            <li><a href="/positions" class="nav-link active">Positions</a></li>
+            <li><a href="/config" class="nav-link">Config</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <div class="stats-row">
+            <div class="stat-box">
+                <div class="stat-label">Open Positions</div>
+                <div class="stat-value" id="open-count">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Total Unrealized PnL</div>
+                <div class="stat-value" id="total-unrealized">$0.00</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Total Realized PnL</div>
+                <div class="stat-value" id="total-realized">$0.00</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">All Positions</h2>
+            </div>
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Entry Price</th>
+                        <th>Current Price</th>
+                        <th>Size</th>
+                        <th>Entry Time</th>
+                        <th>Unrealized PnL</th>
+                        <th>PnL %</th>
+                        <th>4H Trend</th>
+                        <th>1H ST</th>
+                    </tr>
+                </thead>
+                <tbody id="positions-body">
+                    <tr>
+                        <td colspan="10" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                            Loading...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">Trade History</h2>
+            </div>
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Entry Price</th>
+                        <th>Exit Price</th>
+                        <th>Size</th>
+                        <th>PnL</th>
+                        <th>PnL %</th>
+                        <th>Exit Time</th>
+                    </tr>
+                </thead>
+                <tbody id="history-body">
+                    <tr>
+                        <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                            No trade history
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function loadTradeHistory() {
+            try {
+                const response = await fetch('/api/trade-history');
+                const data = await response.json();
+                
+                const historyBody = document.getElementById('history-body');
+                
+                if (!data.trades || data.trades.length === 0) {
+                    historyBody.innerHTML = `
+                        <tr>
+                            <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                                No trade history
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+                
+                // Sort by exit time (newest first)
+                const trades = data.trades.sort((a, b) => 
+                    new Date(b.exit_time || b.timestamp) - new Date(a.exit_time || a.timestamp)
+                );
+                
+                historyBody.innerHTML = trades.map(t => {
+                    const sideClass = t.side === 'LONG' ? 'badge-long' : 'badge-short';
+                    const pnlClass = t.pnl >= 0 ? 'positive' : 'negative';
+                    const exitTime = t.exit_time ? new Date(t.exit_time).toLocaleString() : '-';
+                    const entryTime = t.entry_time ? new Date(t.entry_time).toLocaleString() : '-';
+                    
+                    return `
+                        <tr>
+                            <td><strong>${t.symbol}</strong></td>
+                            <td><span class="badge ${sideClass}">${t.side}</span></td>
+                            <td>$${t.entry_price?.toFixed(2) || '0.00'}</td>
+                            <td>$${t.exit_price?.toFixed(2) || '0.00'}</td>
+                            <td>${t.size?.toFixed(6) || '0'}</td>
+                            <td class="pnl ${pnlClass}">
+                                $${t.pnl?.toFixed(2) || '0.00'}
+                            </td>
+                            <td class="pnl ${pnlClass}">
+                                ${t.pnl_percent >= 0 ? '+' : ''}${t.pnl_percent?.toFixed(2) || '0.00'}%
+                            </td>
+                            <td style="font-size: 0.875rem; color: var(--text-muted);">
+                                ${exitTime}
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('Error loading trade history:', error);
+            }
+        }
+        
+        async function updatePositions() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                const positions = data.symbols.filter(s => s.position);
+                const closed = data.symbols.filter(s => !s.position && s.total_trades > 0);
+                
+                // Update stats
+                document.getElementById('open-count').textContent = positions.length;
+                
+                let totalUnrealized = 0;
+                let totalRealized = 0;
+                
+                positions.forEach(s => {
+                    totalUnrealized += s.unrealized_pnl || 0;
+                });
+                
+                data.symbols.forEach(s => {
+                    totalRealized += s.total_pnl || 0;
+                });
+                
+                document.getElementById('total-unrealized').textContent = `$${totalUnrealized.toFixed(2)}`;
+                document.getElementById('total-realized').textContent = `$${totalRealized.toFixed(2)}`;
+                
+                // Update positions table
+                const tbody = document.getElementById('positions-body');
+                if (positions.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="10" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                                No open positions
+                            </td>
+                        </tr>
+                    `;
+                } else {
+                    tbody.innerHTML = positions.map(s => {
+                        const trendClass = s.trend_4h ? `badge-${s.trend_4h.toLowerCase()}` : 'badge-neutral';
+                        const st1h = s.st_1h === 'green' ? '🟢' : '🔴';
+                        const unrealizedPnL = s.unrealized_pnl || 0;
+                        const pnlPercent = s.pnl_percent || 0;
+                        const currentPrice = s.current_price ? s.current_price.toFixed(2) : '-';
+                        
+                        return `
+                            <tr>
+                                <td><strong>${s.symbol}</strong></td>
+                                <td><span class="badge badge-${s.position.toLowerCase()}">${s.position}</span></td>
+                                <td>$${s.entry_price?.toFixed(2) || '0.00'}</td>
+                                <td>$${currentPrice}</td>
+                                <td>${s.position_size || '0'}</td>
+                                <td>${s.entry_time ? new Date(s.entry_time).toLocaleString() : '-'}</td>
+                                <td class="pnl ${unrealizedPnL >= 0 ? 'positive' : 'negative'}">
+                                    $${unrealizedPnL.toFixed(2)}
+                                </td>
+                                <td class="pnl ${pnlPercent >= 0 ? 'positive' : 'negative'}">
+                                    ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%
+                                </td>
+                                <td><span class="badge ${trendClass}">${s.trend_4h || 'NEUTRAL'}</span></td>
+                                <td>${st1h}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+                
+                // Load trade history from API
+                loadTradeHistory();
+                
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        // Load trade history on page load
+        loadTradeHistory();
+        
+        updatePositions();
+        setInterval(updatePositions, 5000);
+        // Reload trade history every 30 seconds
+        setInterval(loadTradeHistory, 30000);
+    </script>
+</body>
+</html>
+
