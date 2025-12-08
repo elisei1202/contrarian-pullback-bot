@@ -955,23 +955,45 @@ class BotController:
             logger.error(f"Error processing {symbol}: {e}")
     
     def _calculate_current_equity(self) -> Optional[float]:
-        """Get current equity - use total_equity from Bybit if available"""
+        """
+        Get current equity - calculate in real-time if positions are open
+        
+        This ensures equity updates live on the dashboard even when total_equity
+        from Bybit is only updated every 50 minutes. When positions are open,
+        we calculate equity using current prices for real-time updates.
+        """
+        # Check if we have open positions
+        has_open_positions = any(
+            state.position_side and state.position_size 
+            for state in self.states.values()
+        )
+        
+        if has_open_positions:
+            # Calculate equity in real-time using current prices
+            # This ensures dashboard shows live equity updates
+            if self.account_balance is None:
+                return None
+            
+            # Calculate total unrealized PnL from all open positions
+            total_unrealized_pnl = 0.0
+            for symbol, state in self.states.items():
+                if state.position_side and state.entry_price and state.position_size:
+                    current_price = self.realtime_prices.get(symbol)
+                    if current_price:
+                        unrealized_pnl = state.get_unrealized_pnl(current_price)
+                        total_unrealized_pnl += unrealized_pnl
+            
+            return self.account_balance + total_unrealized_pnl
+        
+        # No open positions - use cached total_equity from Bybit (most accurate)
+        # This is updated every 50 minutes via _update_account_balance()
         if self.total_equity is not None:
             return self.total_equity
         
         if self.account_balance is None:
             return None
         
-        # Calculate total unrealized PnL
-        total_unrealized_pnl = 0.0
-        for symbol, state in self.states.items():
-            if state.position_side and state.entry_price:
-                current_price = self.realtime_prices.get(symbol)
-                if current_price:
-                    unrealized_pnl = state.get_unrealized_pnl(current_price)
-                    total_unrealized_pnl += unrealized_pnl
-        
-        return self.account_balance + total_unrealized_pnl
+        return self.account_balance
     
     async def _update_account_balance(self):
         """Update account balance and total equity from Bybit"""
