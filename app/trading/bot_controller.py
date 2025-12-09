@@ -721,6 +721,24 @@ class BotController:
                         
                         logger.info(f"✓ {symbol}: Found existing {side} position @ {entry_price}")
                         
+                        # ===== FIX: Detect if partial TP was already taken before restart =====
+                        # Compare actual position size (in USDT) with standard position size
+                        # Size from Bybit is in base currency, convert to USDT
+                        size_usdt = size * entry_price
+                        expected_size_usdt = self.config.trading.position_size_usdt
+                        
+                        if expected_size_usdt > 0:
+                            size_ratio = size_usdt / expected_size_usdt
+                            
+                            # If position size is ~45-55% of expected, partial TP was already taken
+                            if 0.45 <= size_ratio <= 0.55:
+                                async with self._state_lock:
+                                    state.partial_tp_done = True
+                                logger.info(f"[{symbol}] Detected partial TP already taken (size ratio: {size_ratio:.2%}, actual: {size_usdt:.2f} USDT, expected: {expected_size_usdt:.2f} USDT)")
+                                # Don't place new TP order - partial TP already done
+                                self._record_api_success()
+                                continue
+                        
                         # Check for existing TP order
                         open_orders = await self.client.get_open_orders(symbol)
                         tp_orders = [
