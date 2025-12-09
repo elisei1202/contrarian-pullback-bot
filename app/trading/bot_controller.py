@@ -4,7 +4,7 @@ import logging
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from decimal import Decimal, ROUND_DOWN
 
 from app.config import config
@@ -128,37 +128,6 @@ class BotController:
         else:  # SHORT
             return (entry_price - exit_price) * qty
     
-    def _parse_position_size_from_api(self, position: dict, symbol: str) -> Optional[float]:
-        """
-        Parse position size from API response with validation
-        
-        Centralized parsing to avoid code duplication and ensure consistent error handling.
-        
-        Args:
-            position: Position dict from Bybit API
-            symbol: Trading pair (for logging)
-        
-        Returns:
-            float: Position size, or None if invalid
-        """
-        if not position:
-            return None
-        
-        size_str = position.get('size', '0')
-        if size_str is None:
-            logger.warning(f"[{symbol}] Invalid position size from API (None)")
-            return None
-        
-        try:
-            size = float(size_str)
-            if size < 0:
-                logger.warning(f"[{symbol}] Invalid position size (negative): {size}")
-                return None
-            return size
-        except (ValueError, TypeError) as e:
-            logger.warning(f"[{symbol}] Error parsing position size: {e}")
-            return None
-    
     async def _clear_tp_order_id(self, state: SymbolState):
         """
         Clear TP order ID with proper locking
@@ -170,6 +139,75 @@ class BotController:
         """
         async with self._state_lock:
             state.tp_limit_order_id = None
+    
+    async def _parse_position_from_api(self, position: dict, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse and validate position data from Bybit API
+        
+        Centralized parsing to avoid code duplication and ensure consistent error handling.
+        
+        Note: This is a helper method and does NOT record API failures.
+        The caller should decide whether to record failures based on context.
+        
+        Args:
+            position: Position dict from Bybit API
+            symbol: Trading pair (for logging)
+        
+        Returns:
+            Dict with keys: 'size', 'side' (internal LONG/SHORT), 'entry_price', or None if invalid
+        """
+        if not position:
+            return None
+        
+        size_str = position.get('size', '0')
+        raw_side = position.get('side')
+        avg_price_str = position.get('avgPrice', '0')
+        
+        if not size_str or not raw_side or not avg_price_str:
+            logger.warning(f"[{symbol}] Invalid position data from API")
+            return None
+        
+        try:
+            size = float(size_str)
+            entry_price = float(avg_price_str)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"[{symbol}] Invalid position data format: {e}")
+            return None
+        
+        if size < 0 or entry_price <= 0:
+            logger.warning(f"[{symbol}] Invalid position values: size={size}, price={entry_price}")
+            return None
+        
+        try:
+            side = self._bybit_side_to_internal(raw_side)
+        except ValueError as e:
+            logger.warning(f"[{symbol}] Invalid side from API: {raw_side}")
+            return None
+        
+        return {
+            'size': size,
+            'side': side,
+            'entry_price': entry_price
+        }
+    
+    def _detect_partial_tp(self, actual_size_usdt: float, expected_size_usdt: float) -> bool:
+        """
+        Detect if partial TP was taken based on position size ratio
+        
+        Centralized detection to avoid code duplication.
+        
+        Args:
+            actual_size_usdt: Current position size in USDT
+            expected_size_usdt: Expected standard position size in USDT
+        
+        Returns:
+            True if partial TP detected (size ratio ~45-55%), False otherwise
+        """
+        if expected_size_usdt <= 0:
+            return False
+        
+        size_ratio = self._calculate_size_ratio(actual_size_usdt, expected_size_usdt)
+        return size_ratio is not None and 0.45 <= size_ratio <= 0.55
     
     def __init__(self):
         self.config = config
@@ -214,31 +252,27 @@ class BotController:
         self.last_4h_update = {}
         self.ws_task: Optional[asyncio.Task] = None
         
-        # ===== CRITICAL FIX 6: Track async tasks for proper shutdown =====
+        # Track async tasks for proper shutdown
         self._background_tasks: List[asyncio.Task] = []
-        # ===== FIX 9.1: Lock for _background_tasks to prevent race conditions =====
         self._background_tasks_lock = asyncio.Lock()
         
-        # ===== FIX: Add locks for thread safety =====
-        # ===== CRITICAL FIX 5: Lock acquisition order to prevent deadlocks =====
-        # Order: _state_lock > _entry_lock > _price_lock > _file_lock > _kline_lock
-        # Always acquire locks in this order when multiple locks are needed
+        # Locks for thread safety
+        # Lock acquisition order: _state_lock > _entry_lock > _price_lock > _file_lock > _kline_lock
         self._entry_lock = asyncio.Lock()  # Prevents race condition on balance check + entry
         self._state_lock = asyncio.Lock()  # Protects state modifications (highest priority)
         self._file_lock = asyncio.Lock()   # Protects file I/O operations
         self._price_lock = asyncio.Lock()  # Protects realtime_prices dict
         
-        # ===== FIX: Track processed candles to prevent duplicate entries =====
+        # Track processed candles to prevent duplicate entries
         self._processed_candles: Dict[str, int] = {}  # symbol:interval -> last_timestamp
-        # ===== FIX 4: Lock for _processed_candles access =====
         self._processed_candles_lock = asyncio.Lock()
         
-        # ===== FIX: Circuit breaker for API failures =====
+        # Circuit breaker for API failures
         self._api_failure_count = 0
         self._api_failure_threshold = 5
         self._circuit_breaker_until: Optional[datetime] = None
     
-    def _create_background_task(self, coro):
+    async def _create_background_task(self, coro):
         """
         Create and track a background task for proper shutdown
         
@@ -250,49 +284,42 @@ class BotController:
         
         Returns:
             asyncio.Task: The created task, or None if creation failed
-        
-        Note:
-            This method must be called from an async context (where event loop is running).
-            The task is added to _background_tasks list immediately for tracking.
         """
-        # ===== CRITICAL FIX: Create task and add to list atomically =====
         try:
             task = asyncio.create_task(coro)
             
-            # Add task to list immediately (we're in async context, so this is safe)
-            # Use a helper coroutine to add with lock protection
-            async def add_task_to_list():
-                async with self._background_tasks_lock:
-                    self._background_tasks.append(task)
+            # Add to tracking list with lock protection (thread-safe)
+            async with self._background_tasks_lock:
+                self._background_tasks.append(task)
             
-            # Schedule the add operation (safe because we're in async context)
-            asyncio.create_task(add_task_to_list())
-            
-            # Set up removal callback (runs synchronously when task completes)
+            # Set up removal callback
             def remove_task(t):
-                # Callback runs synchronously - schedule async removal
                 try:
-                    async def remove_task_async():
+                    # Schedule async removal in event loop
+                    async def remove_async():
                         async with self._background_tasks_lock:
                             if t in self._background_tasks:
                                 self._background_tasks.remove(t)
-                    
-                    # Try to get running loop and schedule removal
+                    # Create task for async removal (callback is sync, but we're in event loop)
                     try:
+                        # Use get_running_loop() for Python 3.7+ (more reliable)
                         loop = asyncio.get_running_loop()
-                        loop.create_task(remove_task_async())
+                        loop.create_task(remove_async())
                     except RuntimeError:
-                        # No running loop - task will be cleaned up on shutdown
-                        pass
-                except Exception:
-                    # Silently ignore - task will be cleaned up on shutdown
-                    pass
+                        # Fallback to get_event_loop() if get_running_loop() fails
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                loop.create_task(remove_async())
+                        except RuntimeError:
+                            pass  # Event loop not available
+                except (ValueError, RuntimeError):
+                    pass  # Task already removed or list modified
             
             task.add_done_callback(remove_task)
             return task
             
         except RuntimeError as e:
-            # Event loop might be closed or not running
             logger.warning(f"Could not create background task: {e}")
             return None
         except Exception as e:
@@ -538,7 +565,7 @@ class BotController:
         if target_price <= 0:
             return None
         
-        # ===== FIX 8.1: Overflow protection - ensure target_price is within reasonable range =====
+        # Overflow protection - ensure target_price is within reasonable range
         # Target price should not exceed ±50% of entry price (sanity check)
         max_price_change_pct = 0.5  # 50%
         if position_side == "LONG":
@@ -552,7 +579,7 @@ class BotController:
                 logger.warning(f"Target price {target_price:.2f} below minimum {min_target_price:.2f} (50% below entry)")
                 return None
         
-        # ===== FIX 8.1: Check if target_price is too close to entry_price =====
+        # Check if target_price is too close to entry_price
         # If target_price is within 0.1% of entry_price, it may cause issues with tick size
         price_diff_pct = abs((target_price - entry_price) / entry_price) * 100
         min_price_diff_pct = 0.1  # 0.1% minimum difference
@@ -638,8 +665,7 @@ class BotController:
         # Give trading loop time to finish current iteration
         await asyncio.sleep(2)
         
-        # ===== CRITICAL FIX 6: Await all background tasks before shutdown =====
-        # ===== FIX 9.1: Use lock when accessing _background_tasks =====
+        # Await all background tasks before shutdown
         async with self._background_tasks_lock:
             tasks_to_wait = list(self._background_tasks)
         
@@ -708,12 +734,18 @@ class BotController:
                 position = await self.client.get_position(symbol)
                 
                 if position:
-                    size = float(position.get('size', 0))
+                    # Parse position data using centralized helper
+                    position_data = await self._parse_position_from_api(position, symbol)
+                    if not position_data:
+                        # Invalid position data - record failure and continue to next symbol
+                        self._record_api_failure()
+                        continue
+                    
+                    size = position_data['size']
+                    side = position_data['side']
+                    entry_price = position_data['entry_price']
+                    
                     if size > 0:
-                        raw_side = position.get('side')
-                        side = self._bybit_side_to_internal(raw_side)
-                        entry_price = float(position.get('avgPrice', 0))
-                        
                         # Update state with normalized side (LONG/SHORT)
                         async with self._state_lock:
                             state = self.states[symbol]
@@ -721,21 +753,16 @@ class BotController:
                         
                         logger.info(f"✓ {symbol}: Found existing {side} position @ {entry_price}")
                         
-                        # ===== FIX: Detect if partial TP was already taken before restart =====
-                        # Compare actual position size (in USDT) with standard position size
-                        # Size from Bybit is in base currency, convert to USDT
-                        size_usdt = size * entry_price
-                        expected_size_usdt = self.config.trading.position_size_usdt
-                        
-                        if expected_size_usdt > 0:
-                            size_ratio = size_usdt / expected_size_usdt
+                        # Detect if partial TP was already taken before restart
+                        if entry_price > 0:
+                            size_usdt = size * entry_price
+                            expected_size_usdt = self.config.trading.position_size_usdt
                             
-                            # If position size is ~45-55% of expected, partial TP was already taken
-                            if 0.45 <= size_ratio <= 0.55:
+                            if self._detect_partial_tp(size_usdt, expected_size_usdt):
                                 async with self._state_lock:
                                     state.partial_tp_done = True
-                                logger.info(f"[{symbol}] Detected partial TP already taken (size ratio: {size_ratio:.2%}, actual: {size_usdt:.2f} USDT, expected: {expected_size_usdt:.2f} USDT)")
-                                # Don't place new TP order - partial TP already done
+                                size_ratio = self._calculate_size_ratio(size_usdt, expected_size_usdt)
+                                logger.info(f"[{symbol}] Detected partial TP already taken (size ratio: {size_ratio:.2%})")
                                 self._record_api_success()
                                 continue
                         
@@ -748,7 +775,6 @@ class BotController:
                                o.get("orderStatus") in ["New", "PartiallyFilled"]
                         ]
                         if tp_orders:
-                            # ===== FIX: Set tp_limit_order_id with lock for thread safety =====
                             async with self._state_lock:
                                 state.tp_limit_order_id = tp_orders[0].get("orderId")
                             logger.info(f"[{symbol}] Found existing TP limit order: {state.tp_limit_order_id}")
@@ -807,7 +833,6 @@ class BotController:
                 if candles_1h:
                     candles_1h_chronological = candles_1h[::-1]
                     key_1h = f"{symbol}:60"
-                    # ===== CRITICAL FIX 3: Protect kline_data access with lock =====
                     async with self.websocket._kline_lock:
                         if key_1h not in self.websocket.kline_data:
                             self.websocket.kline_data[key_1h] = deque(maxlen=500)
@@ -824,7 +849,6 @@ class BotController:
                 if candles_4h:
                     candles_4h_chronological = candles_4h[::-1]
                     key_4h = f"{symbol}:240"
-                    # ===== CRITICAL FIX 3: Protect kline_data access with lock =====
                     async with self.websocket._kline_lock:
                         if key_4h not in self.websocket.kline_data:
                             self.websocket.kline_data[key_4h] = deque(maxlen=500)
@@ -856,20 +880,16 @@ class BotController:
         Args:
             symbol: Trading pair (e.g., "BTCUSDT")
             interval: Interval in minutes ("60" for 1H, "240" for 4H)
-            is_confirmed: Whether the candle is confirmed (closed). Only True when candle is fully closed.
+            is_confirmed: Whether the candle is confirmed (closed)
             candle: Candle data [timestamp, open, high, low, close, volume, turnover]
-        
-        Note:
-            Duplicate candle processing is prevented by tracking processed timestamps
         """
         try:
             state = self.states.get(symbol)
             if not state:
                 return
             
-            # ===== FIX: Prevent duplicate processing of same candle =====
+            # Prevent duplicate processing of same candle
             if is_confirmed and candle:
-                # ===== MEDIUM FIX 3 & 4: Add validation for candle data =====
                 if not isinstance(candle, (list, tuple)) or len(candle) < 1:
                     logger.warning(f"[{symbol}] Invalid candle format in kline update")
                     return
@@ -881,7 +901,6 @@ class BotController:
                     logger.warning(f"[{symbol}] Error parsing candle timestamp: {e}")
                     return
                 
-                # ===== FIX 4: Protect _processed_candles access with lock =====
                 async with self._processed_candles_lock:
                     if candle_key in self._processed_candles:
                         if self._processed_candles[candle_key] >= candle_timestamp:
@@ -904,24 +923,17 @@ class BotController:
             
             # 1H candle update - update 1H signal
             elif interval == "60":
-                # ===== FIX 4.1: Use WebSocket data if available, REST API only as fallback =====
                 if is_confirmed:
-                    # For confirmed candles, try WebSocket first (faster), then REST API if needed
                     has_ws_data = await self.websocket.has_klines(symbol, "60")
                     if has_ws_data:
-                        # Use WebSocket data for confirmed candles (already confirmed by WebSocket)
                         await self._update_1h_signal(symbol, state)
                     else:
-                        # Fallback to REST API if WebSocket doesn't have data
                         await self._update_1h_signal_from_rest(symbol, state)
                 else:
-                    # Update from WebSocket for real-time display only
                     await self._update_1h_signal(symbol, state)
                 
-                # ===== CRITICAL FIX 4: Check for entry ONLY on confirmed (closed) 1H candle =====
+                # Check for entry ONLY on confirmed (closed) 1H candle
                 if is_confirmed and not state.position_side and self.trading_enabled:
-                    # Double-check that we have confirmed data before entry
-                    # If WebSocket update failed, try REST API as fallback
                     if not state.st_1h_direction:
                         await self._update_1h_signal_from_rest(symbol, state)
                     await self._check_entry(symbol, state)
@@ -953,8 +965,6 @@ class BotController:
         Note: This is a synchronous method for quick reads.
         For thread-safe access, use _get_current_price_with_fallback which uses locks.
         """
-        # ===== FIX 5: Quick read without lock (acceptable for read-only access) =====
-        # For writes, _handle_price_update uses _price_lock
         return self.realtime_prices.get(symbol)
     
     async def _get_current_price_with_fallback(self, symbol: str) -> Optional[float]:
@@ -964,18 +974,15 @@ class BotController:
         if price:
             return price
         
-        # ===== CRITICAL FIX 8: Fallback to REST API with proper error handling =====
-        # ===== FIX 6.1: Add retry logic for REST API fallback =====
+        # Fallback to REST API with retry logic
         max_retries = 2
         for attempt in range(max_retries):
             try:
                 ticker = await self.client.get_ticker(symbol)
-                # ===== FIX 1.1: More robust validation for get_ticker =====
                 if ticker and isinstance(ticker, dict) and ticker.get('lastPrice'):
                     try:
                         price = float(ticker['lastPrice'])
                         if price > 0:
-                            # Update cache for next time
                             async with self._price_lock:
                                 self.realtime_prices[symbol] = price
                             self._record_api_success()
@@ -985,20 +992,19 @@ class BotController:
                     except (ValueError, TypeError) as e:
                         logger.warning(f"[{symbol}] Error parsing price from API: {e}")
                 
-                # If we got here, ticker was None or invalid, retry if not last attempt
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(0.5)  # Brief delay before retry
+                    await asyncio.sleep(0.5)
                     continue
                     
             except Exception as e:
                 logger.debug(f"Error getting ticker price for {symbol} (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(0.5)  # Brief delay before retry
+                    await asyncio.sleep(0.5)
                     continue
                 else:
                     self._record_api_failure()
         
-        # ===== CRITICAL FIX 8: Final fallback - use last known price if available =====
+        # Final fallback - use last known price if available
         async with self._price_lock:
             cached_price = self.realtime_prices.get(symbol)
             if cached_price and cached_price > 0:
@@ -1027,8 +1033,7 @@ class BotController:
                     await self._update_account_balance()
                     balance_update_counter = 0
                 
-                # ===== FIX: Process symbols sequentially to avoid race conditions =====
-                # This is safer than parallel processing for balance checks
+                # Process symbols sequentially to avoid race conditions
                 for symbol in self.config.trading.symbols:
                     if not self.running:
                         break
@@ -1065,9 +1070,7 @@ class BotController:
             # 2. Update 1H signal (for display only - entry uses confirmed candles)
             await self._update_1h_signal(symbol, state)
             
-            # ===== IMPORTANT FIX 1: Do NOT check entry in trading loop =====
-            # Entry should ONLY happen on confirmed 1H candle close (via WebSocket callback)
-            # This prevents entries on unconfirmed/live candles
+            # NOTE: Entry check is NOT done here - only on confirmed 1H candle via WebSocket
             
             # 3. Check for partial TP
             if state.position_side and not state.partial_tp_done:
@@ -1085,8 +1088,7 @@ class BotController:
         Get current equity - calculate in real-time if positions are open
         
         This ensures equity updates live on the dashboard even when total_equity
-        from Bybit is only updated every 50 minutes. When positions are open,
-        we calculate equity using current prices for real-time updates.
+        from Bybit is only updated every 50 minutes.
         """
         # Check if we have open positions
         has_open_positions = any(
@@ -1095,8 +1097,6 @@ class BotController:
         )
         
         if has_open_positions:
-            # Calculate equity in real-time using current prices
-            # This ensures dashboard shows live equity updates
             if self.account_balance is None:
                 return None
             
@@ -1111,8 +1111,7 @@ class BotController:
             
             return self.account_balance + total_unrealized_pnl
         
-        # No open positions - use cached total_equity from Bybit (most accurate)
-        # This is updated every 50 minutes via _update_account_balance()
+        # No open positions - use cached total_equity from Bybit
         if self.total_equity is not None:
             return self.total_equity
         
@@ -1133,7 +1132,7 @@ class BotController:
             total_equity = await self.client.get_total_equity()
             if total_equity is not None:
                 self.total_equity = total_equity
-                self._add_equity_point(total_equity, force_add=False)
+                await self._add_equity_point(total_equity, force_add=False)
                 self._record_api_success()
         except Exception as e:
             logger.debug(f"Error updating account balance: {e}")
@@ -1149,7 +1148,6 @@ class BotController:
                     logger.info(f"✓ Loaded {len(self.equity_history)} equity data points from history")
         except json.JSONDecodeError as e:
             logger.error(f"Corrupted equity history file: {e}")
-            # Backup corrupted file
             backup_path = self.equity_history_file.with_suffix('.json.bak')
             try:
                 self.equity_history_file.rename(backup_path)
@@ -1179,7 +1177,7 @@ class BotController:
         except Exception as e:
             logger.error(f"Error saving equity history: {e}")
     
-    def _add_equity_point(self, equity: float, force_add: bool = False):
+    async def _add_equity_point(self, equity: float, force_add: bool = False):
         """Add new equity point to history"""
         if equity <= 0:
             return
@@ -1196,9 +1194,7 @@ class BotController:
             self.last_equity_point_time = timestamp
             if len(self.equity_history) > 1000:
                 self.equity_history = self.equity_history[-1000:]
-            # ===== CRITICAL FIX 6: Use tracked background task =====
-            # We're called from async context, so create_task is safe
-            self._create_background_task(self._save_equity_history_async())
+            await self._create_background_task(self._save_equity_history_async())
             return
         
         should_add = False
@@ -1223,9 +1219,7 @@ class BotController:
                 self.equity_history = self.equity_history[-1000:]
             
             if len(self.equity_history) % 10 == 0:
-                # ===== CRITICAL FIX 6: Use tracked background task =====
-                # We're called from async context, so create_task is safe
-                self._create_background_task(self._save_equity_history_async())
+                await self._create_background_task(self._save_equity_history_async())
     
     async def _save_equity_history_async(self):
         """Save equity history asynchronously with lock"""
@@ -1274,12 +1268,12 @@ class BotController:
         async with self._file_lock:
             self._save_trade_history()
     
-    def _add_trade(self, symbol: str, side: str, entry_price: float, exit_price: float, 
+    async def _add_trade(self, symbol: str, side: str, entry_price: float, exit_price: float, 
                    size: float, pnl: float, entry_time: Optional[datetime] = None, is_partial: bool = False):
         """Add completed trade to history"""
         timestamp = datetime.now()
         
-        # ===== FIX: Safe division to prevent division by zero =====
+        # Safe division to prevent division by zero
         position_value = entry_price * size if entry_price and size else 0
         pnl_percent = round((pnl / position_value) * 100, 2) if position_value > 0 else 0
         
@@ -1303,60 +1297,57 @@ class BotController:
         if len(self.trade_history) > 1000:
             self.trade_history = self.trade_history[-1000:]
         
-        # ===== CRITICAL FIX 6: Use tracked background task =====
-        # We're called from async context, so create_task is safe
-        self._create_background_task(self._save_trade_history_async())
+        await self._create_background_task(self._save_trade_history_async())
     
     async def _verify_position(self, symbol: str, state: SymbolState):
         """Verify position state matches Bybit reality"""
         try:
             position = await self.client.get_position(symbol)
             
-            # ===== CRITICAL FIX 2: Consistent lock ordering - state_lock before entry_lock =====
+            # Parse position data BEFORE acquiring lock (avoid deadlock)
+            position_data = None
+            if position:
+                position_data = await self._parse_position_from_api(position, symbol)
+                if not position_data:
+                    # Invalid position data - record failure and return
+                    self._record_api_failure()
+                    return
+            
+            # Now acquire lock only for state modifications
             async with self._state_lock:
-                if position:
-                    # ===== CRITICAL FIX 7: Add null/type validation =====
-                    size_str = position.get('size', '0')
-                    raw_side = position.get('side')
-                    avg_price_str = position.get('avgPrice', '0')
-                    
-                    if not size_str or not raw_side or not avg_price_str:
-                        logger.warning(f"[{symbol}] Invalid position data from API")
-                        self._record_api_failure()
-                        return
-                    
-                    try:
-                        actual_size = float(size_str)
-                        actual_entry_price = float(avg_price_str)
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"[{symbol}] Invalid position data format: {e}")
-                        self._record_api_failure()
-                        return
-                    
-                    actual_side = self._bybit_side_to_internal(raw_side)
-                    if actual_side not in ["LONG", "SHORT"]:
-                        logger.warning(f"[{symbol}] Invalid side from API: {raw_side}")
-                        self._record_api_failure()
-                        return
+                if position_data:
+                    actual_size = position_data['size']
+                    actual_side = position_data['side']
+                    actual_entry_price = position_data['entry_price']
                     
                     if actual_size > 0:
+                        # Detect partial TP before calling open_position()
+                        partial_tp_detected = False
+                        if actual_entry_price > 0:
+                            size_usdt = actual_size * actual_entry_price
+                            expected_size_usdt = self.config.trading.position_size_usdt
+                            partial_tp_detected = self._detect_partial_tp(size_usdt, expected_size_usdt)
+                        
                         if not state.position_side:
                             logger.warning(f"[{symbol}] Position found on Bybit but not in state - syncing")
                             state.open_position(actual_side, actual_size, actual_entry_price)
+                            if partial_tp_detected:
+                                state.partial_tp_done = True
                         elif state.position_side != actual_side or abs((state.position_size or 0) - actual_size) > 0.0001:
                             logger.warning(f"[{symbol}] Position mismatch - updating state from Bybit")
-                            # Note: Manual partial close detection is handled in _check_partial_tp
+                            was_partial_tp_done = state.partial_tp_done
                             state.open_position(actual_side, actual_size, actual_entry_price)
+                            if was_partial_tp_done or partial_tp_detected:
+                                state.partial_tp_done = True
                     else:
                         # Position closed on Bybit
                         if state.position_side:
                             logger.warning(f"[{symbol}] Position in state but not on Bybit - clearing state")
-                            # ===== FIX 10: Reset position including partial_tp_done =====
                             state.reset_position()
                 else:
+                    # No position on Bybit
                     if state.position_side:
                         logger.warning(f"[{symbol}] Position in state but not on Bybit - clearing state")
-                        # ===== FIX 10: Reset position including partial_tp_done =====
                         state.reset_position()
             
             self._record_api_success()
@@ -1378,7 +1369,7 @@ class BotController:
                 logger.warning(f"{symbol}: Not enough 4H candles available ({len(candles_4h) if candles_4h else 0})")
                 return
             
-            # ===== CRITICAL FIX 7: Validate candle data format =====
+            # Validate candle data format
             most_recent_candle = candles_4h[0]
             if not isinstance(most_recent_candle, (list, tuple)) or len(most_recent_candle) < 5:
                 logger.error(f"{symbol}: Invalid candle format from API")
@@ -1396,7 +1387,7 @@ class BotController:
                 self._record_api_failure()
                 return
             
-            # ===== IMPORTANT FIX 5: Validate sufficient data before indicator calculations =====
+            # Validate sufficient data before indicator calculations
             min_candles_for_ema = self.config.indicators.ema_period_4h
             min_candles_for_st = self.config.indicators.st_period_4h + 1
             
@@ -1443,7 +1434,6 @@ class BotController:
     async def _update_1h_signal(self, symbol: str, state: SymbolState):
         """Update 1H signal using WebSocket klines (for real-time display)"""
         try:
-            # ===== CRITICAL FIX 3: Use await for async get_klines =====
             candles_1h = await self.websocket.get_klines(
                 symbol=symbol,
                 interval="60",
@@ -1461,7 +1451,7 @@ class BotController:
             if not candles_1h:
                 return
             
-            # ===== IMPORTANT FIX 5: Validate sufficient data before indicator calculations =====
+            # Validate sufficient data before indicator calculations
             min_candles_for_st = self.config.indicators.st_period_1h + 1
             if len(candles_1h) < min_candles_for_st:
                 logger.warning(f"{symbol}: Not enough 1H candles for SuperTrend ({len(candles_1h)} < {min_candles_for_st})")
@@ -1480,7 +1470,6 @@ class BotController:
             async with self._state_lock:
                 state.update_1h_signal(st_dir, st_val)
             
-            # ===== CRITICAL FIX 3: Use await for async has_klines =====
             source = "WebSocket" if await self.websocket.has_klines(symbol, "60") else "REST"
             logger.debug(f"[{symbol}] 1H ST: {st_dir} [{source}]")
         
@@ -1492,19 +1481,9 @@ class BotController:
         Update 1H signal using REST API (for confirmed candles only)
         
         This method is used when we need confirmed candle data, such as before
-        making entry decisions. REST API provides confirmed (closed) candles only,
-        unlike WebSocket which may send live candles.
-        
-        Args:
-            symbol: Trading pair
-            state: SymbolState instance to update
-        
-        Note:
-            This method validates that sufficient candles are available before
-            calculating indicators to prevent errors.
+        making entry decisions.
         """
         try:
-            # ===== CRITICAL FIX 4: Always use REST API for confirmed candles =====
             candles_1h = await self.client.get_klines(
                 symbol=symbol,
                 interval="60",
@@ -1515,7 +1494,7 @@ class BotController:
                 logger.warning(f"{symbol}: Cannot fetch confirmed 1H candles from REST API")
                 return
             
-            # ===== IMPORTANT FIX 5: Validate sufficient data before indicator calculations =====
+            # Validate sufficient data before indicator calculations
             min_candles_for_st = self.config.indicators.st_period_1h + 1
             if len(candles_1h) < min_candles_for_st:
                 logger.warning(f"{symbol}: Not enough 1H candles for SuperTrend ({len(candles_1h)} < {min_candles_for_st})")
@@ -1546,27 +1525,7 @@ class BotController:
         This method implements the contrarian entry strategy:
         - LONG: When 4H trend is BULLISH and 1H SuperTrend is RED (buy the dip)
         - SHORT: When 4H trend is BEARISH and 1H SuperTrend is GREEN (sell the rip)
-        
-        Entry conditions:
-        1. No existing position
-        2. Valid 4H trend (BULLISH or BEARISH, not NEUTRAL)
-        3. Contrarian signal present (1H ST opposite to 4H trend)
-        4. Sufficient balance available
-        5. Maximum positions limit not reached (8 positions)
-        6. Trading enabled
-        7. Circuit breaker not active
-        
-        Args:
-            symbol: Trading pair
-            state: SymbolState instance
-        
-        Note:
-            This method uses _entry_lock to prevent race conditions on balance
-            checks and position verification. It also re-fetches confirmed 1H data
-            from REST API to ensure accuracy before entry.
         """
-        # ===== CRITICAL FIX: Prevent deadlock - don't hold _entry_lock when calling _enter_position =====
-        # We do initial checks without lock, then _enter_position will acquire its own lock
         # Double-check position first
         if state.position_side:
             logger.debug(f"[{symbol}] Already in position ({state.position_side}), skipping entry check")
@@ -1576,7 +1535,7 @@ class BotController:
         if self._is_circuit_breaker_active():
             return
         
-        # ===== FIX 9.1 & 1.1: Count total open positions with state lock to prevent race condition =====
+        # Count total open positions
         async with self._state_lock:
             total_open_positions = sum(1 for s in self.states.values() if s.position_side)
         
@@ -1588,8 +1547,7 @@ class BotController:
             logger.debug(f"[{symbol}] No valid 4H trend ({state.trend_4h}), skipping entry check")
             return
         
-        # ===== CRITICAL FIX 4: Ensure we have confirmed 1H signal before entry =====
-        # Re-fetch confirmed 1H signal to ensure we're using confirmed candle data
+        # Ensure we have confirmed 1H signal before entry
         await self._update_1h_signal_from_rest(symbol, state)
         
         if not state.st_1h_direction:
@@ -1609,13 +1567,12 @@ class BotController:
             logger.debug(f"[{symbol}] Trading disabled, skipping entry")
             return
         
-        # Quick balance check (without lock) - _enter_position will do final check with lock
+        # Quick balance check
         await self._update_account_balance()
         if not self.account_balance:
             logger.warning(f"[{symbol}] Cannot get account balance, skipping entry")
             return
         
-        # ===== FIX 6: Use centralized required_margin calculation =====
         required_margin = self._calculate_required_margin()
             
         if self.account_balance < required_margin:
@@ -1630,7 +1587,6 @@ class BotController:
         logger.info(f"         → Entering {signal}")
         logger.info("=" * 60)
         
-        # ===== CRITICAL FIX: Don't hold lock here - _enter_position will acquire its own lock =====
         await self._enter_position(symbol, signal, state)
     
     async def _place_partial_tp_limit_order(self, symbol: str, state: SymbolState):
@@ -1653,30 +1609,22 @@ class BotController:
             
             if tp_orders:
                 logger.debug(f"[{symbol}] TP limit order already exists, skipping")
-                # ===== FIX: Set tp_limit_order_id with lock for thread safety =====
                 async with self._state_lock:
                     state.tp_limit_order_id = tp_orders[0].get("orderId")
                 return
             
-            # ===== FIX: Use centralized TP calculation =====
             target_profit = self._calculate_tp_target_profit()
-            
             qty_partial = self._calculate_partial_qty(state.position_size, percentage=0.5)
             
-            # ===== IMPORTANT FIX 2: Correct TP calculation for SHORT positions =====
-            # For SHORT: profit = (entry_price - exit_price) * qty
-            # Maximum profit occurs when exit_price = 0, so max_profit = entry_price * qty
-            # We need to ensure target_profit is achievable
+            # For SHORT: validate target profit is achievable
             if state.position_side == "SHORT":
                 max_possible_profit = state.entry_price * qty_partial
                 
                 if target_profit > max_possible_profit:
                     logger.warning(f"[{symbol}] Target profit {target_profit:.2f} USDT exceeds maximum achievable {max_possible_profit:.2f} USDT")
-                    # Use 95% of max to leave some buffer for fees and slippage
                     target_profit = max_possible_profit * 0.95
                     logger.info(f"[{symbol}] Adjusted target profit to {target_profit:.2f} USDT (95% of max)")
             
-            # ===== MEDIUM FIX 1: Use centralized TP target price calculation =====
             target_price = self._calculate_tp_target_price(
                 state.position_side,
                 state.entry_price,
@@ -1689,7 +1637,6 @@ class BotController:
                 return
             
             # Get instrument info for validation
-            # ===== FIX 7.1: Use centralized validation =====
             info = await self.client.get_instruments_info(symbol)
             if not self._validate_instruments_info(info, symbol):
                 return
@@ -1715,7 +1662,6 @@ class BotController:
             qty = await self._adjust_qty_to_step_size(symbol, qty_partial)
             
             # Validate minimum order size
-            # ===== FIX 8: Add validation for lotSizeFilter =====
             lot_size_filter = info.get("lotSizeFilter", {})
             if not lot_size_filter or not isinstance(lot_size_filter, dict):
                 logger.error(f"[{symbol}] Invalid lotSizeFilter in instruments info")
@@ -1726,7 +1672,6 @@ class BotController:
                 logger.warning(f"[{symbol}] TP qty {qty} below minimum {min_qty}")
                 return
             
-            # ===== MEDIUM FIX 2: Use centralized exit side conversion =====
             side = self._get_exit_side_bybit(state.position_side)
             
             order = await self.client.place_order(
@@ -1751,7 +1696,6 @@ class BotController:
             result = order.get("result", {})
             order_id = result.get("orderId") if result else order.get("orderId")
             if order_id:
-                # ===== FIX 2.1: Set tp_limit_order_id with lock =====
                 async with self._state_lock:
                     state.tp_limit_order_id = order_id
             
@@ -1767,15 +1711,9 @@ class BotController:
     async def _handle_partial_tp_executed(self, symbol: str, state: SymbolState, actual_size: float, exit_price_override: Optional[float] = None):
         """
         Handle partial TP execution (when limit order was filled or manually closed)
-        
-        Args:
-            symbol: Trading pair
-            state: SymbolState instance
-            actual_size: New position size after partial close
-            exit_price_override: Optional exit price (for manual partial closes when execution price is not available)
         """
         try:
-            # ===== CRITICAL FIX 7: Validate actual_size before calculations =====
+            # Validate actual_size before calculations
             if actual_size is None or actual_size < 0:
                 logger.error(f"[{symbol}] Invalid actual_size for partial TP: {actual_size}")
                 return
@@ -1794,7 +1732,6 @@ class BotController:
             target_profit = self._calculate_tp_target_profit()
             qty_closed = state.position_size - actual_size
             
-            # ===== CRITICAL FIX: Get real execution price from API instead of calculating =====
             if qty_closed <= 0:
                 logger.error(f"[{symbol}] Invalid qty_closed for partial TP: {qty_closed}")
                 return
@@ -1822,8 +1759,7 @@ class BotController:
                 logger.error(f"[{symbol}] Invalid exit_price calculated: {exit_price}")
                 return
             
-            # ===== FIX 1.2: Calculate actual PnL based on exit_price, not just target_profit =====
-            # The actual PnL may differ from target_profit if execution price differs
+            # Calculate actual PnL based on exit_price
             try:
                 partial_pnl = self._calculate_pnl(
                     state.position_side,
@@ -1839,10 +1775,9 @@ class BotController:
                 state.total_pnl += partial_pnl
                 state.position_size = actual_size
                 state.partial_tp_done = True
-                # ===== FIX: Clear TP order ID (already in lock, direct assignment is safe) =====
                 state.tp_limit_order_id = None
             
-            self._add_trade(
+            await self._add_trade(
                 symbol=symbol,
                 side=state.position_side,
                 entry_price=state.entry_price,
@@ -1855,7 +1790,7 @@ class BotController:
             
             equity = self._calculate_current_equity()
             if equity is not None:
-                self._add_equity_point(equity, force_add=True)
+                await self._add_equity_point(equity, force_add=True)
             
             logger.info(f"[{symbol}] ✅ Partial TP executed via limit order")
             logger.info(f"         Partial PnL: {partial_pnl:.2f} USDT")
@@ -1871,16 +1806,6 @@ class BotController:
         This method checks if partial TP conditions are met:
         1. If TP limit order exists, verify if it was executed
         2. If no TP order exists and partial TP not done, place a new limit order
-        
-        Partial TP closes 50% of position when target profit (full margin + fees) is reached.
-        Uses ONLY limit orders - no market orders.
-        
-        Args:
-            symbol: Trading pair
-            state: SymbolState instance
-        
-        Note:
-            Partial TP is only executed once per position (tracked by partial_tp_done flag)
         """
         if not state.position_side or not state.entry_price or state.partial_tp_done:
             return
@@ -1889,7 +1814,6 @@ class BotController:
         if state.tp_limit_order_id:
             try:
                 open_orders = await self.client.get_open_orders(symbol)
-                # ===== MEDIUM FIX 3 & 4: Add null/None validation =====
                 if open_orders is None:
                     open_orders = []
                 
@@ -1902,12 +1826,13 @@ class BotController:
                     # Order executed or cancelled
                     position = await self.client.get_position(symbol)
                     if position:
-                        # ===== MINOR FIX 2: Use centralized parsing method =====
-                        actual_size = self._parse_position_size_from_api(position, symbol)
-                        if actual_size is None:
+                        # Parse position data using centralized helper
+                        position_data = await self._parse_position_from_api(position, symbol)
+                        if not position_data:
                             return
                         
-                        # ===== MEDIUM FIX 3: Add edge case validation =====
+                        actual_size = position_data['size']
+                        
                         if not self._validate_position_size(state.position_size, symbol):
                             return
                         
@@ -1917,32 +1842,46 @@ class BotController:
                             await self._handle_partial_tp_executed(symbol, state, actual_size)
                             return
                         elif actual_size >= state.position_size * 0.95:
-                            # ===== FIX 5.1: Order was cancelled (not executed) - reset tp_limit_order_id =====
-                            # Position size is still close to original (>95%), so order was cancelled
+                            # Order was cancelled (not executed) - reset tp_limit_order_id
                             logger.info(f"[{symbol}] TP limit order was cancelled (not executed) - resetting order ID")
                             await self._clear_tp_order_id(state)
                             return
                         else:
-                            # Position size changed but not by 50% - might be manual partial close
-                            # Check if it's approximately 50% reduction
-                            size_ratio = self._calculate_size_ratio(actual_size, state.position_size)
-                            if size_ratio is not None and 0.45 <= size_ratio <= 0.55:
-                                # It's a partial close - treat as TP executed
-                                logger.info(f"[{symbol}] Detected partial position close (size ratio: {size_ratio:.2%}) - treating as TP executed")
+                            # Position size changed - might be manual partial close
+                            # Check if it's a partial TP using centralized detection
+                            if state.entry_price and state.entry_price > 0:
+                                actual_size_usdt = actual_size * state.entry_price
+                                expected_size_usdt = state.position_size * state.entry_price
                                 
-                                # ===== CRITICAL FIX: Try to get real execution price from recent executions =====
-                                exit_price_override = await self._get_execution_price_from_recent_executions(
-                                    symbol, state.position_side, time_window_seconds=300
-                                )
-                                
-                                await self._handle_partial_tp_executed(symbol, state, actual_size, exit_price_override=exit_price_override)
+                                if self._detect_partial_tp(actual_size_usdt, expected_size_usdt):
+                                    size_ratio = self._calculate_size_ratio(actual_size, state.position_size)
+                                    logger.info(f"[{symbol}] Detected partial position close (size ratio: {size_ratio:.2%}) - treating as TP executed")
+                                    
+                                    exit_price_override = await self._get_execution_price_from_recent_executions(
+                                        symbol, state.position_side, time_window_seconds=300
+                                    )
+                                    
+                                    await self._handle_partial_tp_executed(symbol, state, actual_size, exit_price_override=exit_price_override)
+                                else:
+                                    size_ratio = self._calculate_size_ratio(actual_size, state.position_size)
+                                    logger.warning(f"[{symbol}] Position size changed unexpectedly (ratio: {size_ratio:.2%}) - resetting TP order ID")
+                                    await self._clear_tp_order_id(state)
                             else:
-                                # Position changed but not a clear partial TP - just reset order ID
-                                logger.warning(f"[{symbol}] Position size changed unexpectedly (ratio: {size_ratio:.2%}) - resetting TP order ID")
-                                await self._clear_tp_order_id(state)
+                                # Fallback to size ratio if entry_price not available
+                                size_ratio = self._calculate_size_ratio(actual_size, state.position_size)
+                                if size_ratio is not None and 0.45 <= size_ratio <= 0.55:
+                                    logger.info(f"[{symbol}] Detected partial position close (size ratio: {size_ratio:.2%}) - treating as TP executed")
+                                    
+                                    exit_price_override = await self._get_execution_price_from_recent_executions(
+                                        symbol, state.position_side, time_window_seconds=300
+                                    )
+                                    
+                                    await self._handle_partial_tp_executed(symbol, state, actual_size, exit_price_override=exit_price_override)
+                                else:
+                                    logger.warning(f"[{symbol}] Position size changed unexpectedly (ratio: {size_ratio:.2%}) - resetting TP order ID")
+                                    await self._clear_tp_order_id(state)
                             return
                     else:
-                        # ===== FIX 5.1: Position closed, reset TP order ID =====
                         await self._clear_tp_order_id(state)
                         return
             except Exception as e:
@@ -1957,7 +1896,6 @@ class BotController:
     async def _adjust_qty_to_step_size(self, symbol: str, qty: float) -> float:
         """Adjust quantity to symbol's step size"""
         try:
-            # ===== FIX 7.1: Use centralized validation =====
             info = await self.client.get_instruments_info(symbol)
             if not self._validate_instruments_info(info, symbol):
                 return qty
@@ -1986,7 +1924,6 @@ class BotController:
     async def _adjust_price_to_tick_size(self, symbol: str, price: float) -> float:
         """Adjust price to symbol's tick size"""
         try:
-            # ===== FIX 7.1: Use centralized validation =====
             info = await self.client.get_instruments_info(symbol)
             if not self._validate_instruments_info(info, symbol):
                 return price
@@ -2012,12 +1949,6 @@ class BotController:
             logger.error(f"Error adjusting price to tick size for {symbol}: {e}")
             return price
     
-    # NOTE: _partial_exit_position is currently unused (fallback market order removed)
-    # Kept for potential future use or manual partial exits
-    # async def _partial_exit_position(self, symbol: str, state: SymbolState, percentage: float = 0.5):
-    #     """Close partial position (currently unused - partial TP uses only limit orders)"""
-    #     ...
-    
     async def _check_exit(self, symbol: str, state: SymbolState):
         """
         Check for exit signal
@@ -2028,22 +1959,12 @@ class BotController:
         
         Cooldown protection:
         - Positions opened less than 1 hour ago are protected from flip-based exits
-        - Only strong opposite signals (ST opposite to position) can exit during cooldown
-        - This prevents premature exits on temporary ST flips right after entry
-        
-        Args:
-            symbol: Trading pair
-            state: SymbolState instance
-        
-        Note:
-            Exit is always allowed if 4H ST is opposite to position, regardless
-            of cooldown period. This ensures we exit when trend clearly reversed.
+        - Only strong opposite signals can exit during cooldown
         """
         if not state.position_side:
             return
         
-        # ===== FIX 9: Check exit signal first, then apply cooldown logic =====
-        # Check if exit signal is present (handles both flip and opposite ST)
+        # Check exit signal
         should_exit = self.contrarian.check_exit_signal(
             state.position_side,
             state.st_4h_direction,
@@ -2051,28 +1972,22 @@ class BotController:
             state.trend_4h
         )
         
-        # ===== IMPORTANT FIX 3: Prevent early exit - add cooldown period =====
-        # Don't exit immediately after entry to avoid premature exits due to ST flips
-        # BUT allow exit if ST is clearly opposite to position (strong signal)
+        # Apply cooldown logic
         if should_exit and state.entry_time:
             time_since_entry = (datetime.now() - state.entry_time).total_seconds()
             min_hold_time = 3600  # 1 hour minimum hold time
             if time_since_entry < min_hold_time:
-                # Check if exit is due to opposite ST (strong signal) or just a flip
                 is_opposite_st = (
                     (state.position_side == "LONG" and state.st_4h_direction == "red") or
                     (state.position_side == "SHORT" and state.st_4h_direction == "green")
                 )
                 
                 if is_opposite_st:
-                    # Allow exit if ST is opposite (strong signal) even during cooldown
-                    logger.info(f"[{symbol}] Early exit allowed: {state.position_side} position but 4H ST is {state.st_4h_direction} (cooldown: {int(time_since_entry)}s)")
+                    logger.info(f"[{symbol}] Early exit allowed: {state.position_side} position but 4H ST is {state.st_4h_direction}")
                 elif state.st_4h_prev_direction and state.st_4h_prev_direction != state.st_4h_direction:
-                    # This is a flip - allow it even during cooldown if it's a real flip
-                    logger.info(f"[{symbol}] Early exit allowed: 4H ST flipped from {state.st_4h_prev_direction} to {state.st_4h_direction} (cooldown: {int(time_since_entry)}s)")
+                    logger.info(f"[{symbol}] Early exit allowed: 4H ST flipped from {state.st_4h_prev_direction} to {state.st_4h_direction}")
                 else:
-                    # During cooldown, block exit if it's not a clear signal
-                    logger.debug(f"[{symbol}] Exit blocked during cooldown ({int(time_since_entry)}s) - not a strong signal")
+                    logger.debug(f"[{symbol}] Exit blocked during cooldown ({int(time_since_entry)}s)")
                     should_exit = False
         
         if should_exit:
@@ -2086,9 +2001,6 @@ class BotController:
     async def _enter_position(self, symbol: str, side: str, state: SymbolState):
         """Execute entry order"""
         try:
-            # ===== CRITICAL FIX 1: Re-check balance and position immediately before order =====
-            # This prevents race conditions where balance/position changes between check and order
-            # ===== FIX 2.1: Keep entry_lock until order is placed to prevent duplicate entries =====
             async with self._entry_lock:
                 # Re-check position (may have been opened by another process)
                 if state.position_side:
@@ -2101,7 +2013,6 @@ class BotController:
                     logger.warning(f"[{symbol}] Cannot get account balance, skipping entry")
                     return
                 
-                # ===== FIX 6: Use centralized required_margin calculation =====
                 required_margin = self._calculate_required_margin()
                 if self.account_balance < required_margin:
                     logger.warning(f"[{symbol}] Insufficient balance at order time: {self.account_balance:.2f} USDT < {required_margin:.2f} USDT")
@@ -2117,7 +2028,6 @@ class BotController:
                     logger.error(f"[{symbol}] Cannot get ticker price")
                     return
                 
-                # ===== FIX 8.1 & 1.1: Explicit error handling for calculate_qty =====
                 try:
                     qty = await self.client.calculate_qty(
                         symbol=symbol,
@@ -2166,33 +2076,19 @@ class BotController:
                 logger.error(f"[{symbol}] Order placed but position not found")
                 return
             
-            # ===== CRITICAL FIX 7: Validate position data from API =====
-            size_str = position.get('size', '0')
-            raw_side = position.get('side')
-            avg_price_str = position.get('avgPrice', '0')
-            
-            if not size_str or not raw_side or not avg_price_str:
+            # Parse position data using centralized helper
+            position_data = await self._parse_position_from_api(position, symbol)
+            if not position_data:
                 logger.error(f"[{symbol}] Invalid position data from API after order")
+                self._record_api_failure()
                 return
             
-            try:
-                actual_size = float(size_str)
-                actual_entry_price = float(avg_price_str)
-            except (ValueError, TypeError) as e:
-                logger.error(f"[{symbol}] Error parsing position data: {e}")
-                return
+            actual_size = position_data['size']
+            actual_side = position_data['side']
+            actual_entry_price = position_data['entry_price']
             
             if actual_size <= 0:
                 logger.error(f"[{symbol}] Order placed but position size is 0")
-                return
-            
-            if actual_entry_price <= 0:
-                logger.error(f"[{symbol}] Invalid entry price from API: {actual_entry_price}")
-                return
-            
-            actual_side = self._bybit_side_to_internal(raw_side)
-            if actual_side not in ["LONG", "SHORT"]:
-                logger.error(f"[{symbol}] Invalid side from API: {raw_side}")
                 return
             
             async with self._state_lock:
@@ -2222,7 +2118,6 @@ class BotController:
                 except Exception as e:
                     logger.warning(f"[{symbol}] Error cancelling TP order: {e}")
                 finally:
-                    # ===== FIX 3: Use centralized method with lock =====
                     await self._clear_tp_order_id(state)
             
             exit_price = await self._get_current_price_with_fallback(symbol)
@@ -2230,10 +2125,9 @@ class BotController:
                 logger.error(f"[{symbol}] Cannot get ticker price for exit")
                 return
             
-            # ===== MEDIUM FIX 2: Use centralized exit side conversion =====
-            # ===== MEDIUM FIX 4: Add null/None validation =====
+            # Validate position data
             if not state.position_side or not state.entry_price or not state.position_size:
-                logger.error(f"[{symbol}] Cannot exit - missing position data (side: {state.position_side}, entry: {state.entry_price}, size: {state.position_size})")
+                logger.error(f"[{symbol}] Cannot exit - missing position data")
                 return
             
             if not self._validate_position_size(state.position_size, symbol):
@@ -2254,13 +2148,12 @@ class BotController:
                 self._record_api_failure()
                 return
             
-            # ===== FIX 7.1: Use centralized PnL calculation =====
+            # Calculate PnL
             entry_price = state.entry_price
             entry_time = state.entry_time
             position_side = state.position_side
             position_size = state.position_size
             
-            # Calculate PnL using centralized method
             try:
                 pnl = self._calculate_pnl(position_side, entry_price, exit_price, position_size)
             except ValueError as e:
@@ -2268,11 +2161,10 @@ class BotController:
                 pnl = state.get_unrealized_pnl(exit_price)  # Fallback
             
             async with self._state_lock:
-                # ===== FIX 7.1: Pass pre-calculated PnL to avoid duplication =====
                 state.close_position(exit_price, pnl=pnl)
             
             if entry_price and position_side and position_size:
-                self._add_trade(
+                await self._add_trade(
                     symbol=symbol,
                     side=position_side,
                     entry_price=entry_price,
@@ -2284,7 +2176,7 @@ class BotController:
             
             equity = self._calculate_current_equity()
             if equity is not None:
-                self._add_equity_point(equity, force_add=True)
+                await self._add_equity_point(equity, force_add=True)
             
             logger.info(f"[{symbol}] ✅ Position closed")
             logger.info(f"         Exit: {exit_price}")
@@ -2369,7 +2261,6 @@ class BotController:
             if not state:
                 return {"error": "Symbol not found"}
             
-            # ===== CRITICAL FIX 3: Use async methods or lock for kline_data access =====
             candles_4h = await self.websocket.get_klines_chronological(symbol, "240", limit=200)
             candles_1h = await self.websocket.get_klines_chronological(symbol, "60", limit=200)
             
@@ -2389,7 +2280,7 @@ class BotController:
                 else:
                     pnl_percent = ((state.entry_price - current_price) / state.entry_price) * 100
                 
-                # ===== MEDIUM FIX 1: Use centralized TP target price calculation =====
+                # Calculate TP target price
                 tp_target_price = None
                 if state.position_size and state.entry_price and state.position_side:
                     target_profit = self._calculate_tp_target_profit()
