@@ -1431,6 +1431,61 @@ class BotController:
             logger.error(f"Error updating 4H trend for {symbol}: {e}")
             self._record_api_failure()
     
+    async def _check_4h_supertrend_live(self, symbol: str, state: SymbolState) -> bool:
+        """
+        Verifică dacă SuperTrend 4H pe lumânarea live este încă în același trend
+        ca pe ultima lumânare închisă.
+        
+        Protecție împotriva intrărilor greșite când trend-ul s-a schimbat deja pe live.
+        
+        Args:
+            symbol: Trading pair
+            state: SymbolState instance
+        
+        Returns:
+            True dacă trend-ul este consistent (nu s-a schimbat pe live) - poate intra
+            False dacă trend-ul s-a schimbat pe live (nu intră) - protecție activă
+        """
+        try:
+            # Verifică dacă avem trend 4H salvat
+            if not state.st_4h_direction:
+                logger.debug(f"[{symbol}] No 4H SuperTrend direction saved, skipping live check")
+                return True  # Dacă nu avem trend salvat, permitem entry (nu avem de ce să blocăm)
+            
+            # Obține lumânările 4H din WebSocket (inclusiv live)
+            candles_4h = await self.websocket.get_klines_chronological(symbol, "240", limit=self.config.indicators.ema_period_4h + 50)
+            
+            if not candles_4h or len(candles_4h) < self.config.indicators.st_period_4h + 1:
+                logger.debug(f"[{symbol}] Not enough 4H candles from WebSocket for live check, allowing entry")
+                return True  # Dacă nu avem suficiente date, permitem entry (nu blocăm)
+            
+            # Calculează SuperTrend 4H cu lumânarea live inclusă
+            try:
+                st_dir_live, st_val_live = calculate_supertrend(
+                    candles_4h,
+                    self.config.indicators.st_period_4h,
+                    self.config.indicators.st_multiplier_4h
+                )
+            except (ValueError, Exception) as e:
+                logger.debug(f"[{symbol}] Error calculating live SuperTrend 4H: {e}, allowing entry")
+                return True  # Dacă calculul eșuează, permitem entry (nu blocăm)
+            
+            # Compară direcția SuperTrend 4H pe live cu cea salvată
+            if st_dir_live != state.st_4h_direction:
+                logger.warning(f"[{symbol}] ⚠️ SuperTrend 4H changed on live candle!")
+                logger.warning(f"         Saved (closed): {state.st_4h_direction}")
+                logger.warning(f"         Live (current): {st_dir_live}")
+                logger.warning(f"         → Entry blocked to prevent false signal")
+                return False  # Trend-ul s-a schimbat pe live - nu intră
+            
+            # Trend-ul este consistent
+            logger.debug(f"[{symbol}] SuperTrend 4H live check passed: {st_dir_live} (consistent with closed candle)")
+            return True
+        
+        except Exception as e:
+            logger.debug(f"[{symbol}] Error checking live SuperTrend 4H: {e}, allowing entry")
+            return True  # Dacă apare o eroare, permitem entry (nu blocăm din cauza erorilor)
+    
     async def _update_1h_signal(self, symbol: str, state: SymbolState):
         """Update 1H signal using WebSocket klines (for real-time display)"""
         try:
@@ -1565,6 +1620,13 @@ class BotController:
         
         if not self.trading_enabled:
             logger.debug(f"[{symbol}] Trading disabled, skipping entry")
+            return
+        
+        # ===== PROTECȚIE: Verifică SuperTrend 4H pe lumânarea live =====
+        # Previne intrările greșite când trend-ul s-a schimbat deja pe live
+        trend_consistent = await self._check_4h_supertrend_live(symbol, state)
+        if not trend_consistent:
+            logger.warning(f"[{symbol}] Entry blocked: SuperTrend 4H changed on live candle (protection active)")
             return
         
         # Quick balance check
