@@ -1313,6 +1313,13 @@ class BotController:
                     self._record_api_failure()
                     return
             
+            # Variables for saving trade outside lock
+            should_save_trade = False
+            entry_price = None
+            entry_time = None
+            position_side = None
+            position_size = None
+            
             # Now acquire lock only for state modifications
             async with self._state_lock:
                 if position_data:
@@ -1340,15 +1347,77 @@ class BotController:
                             if was_partial_tp_done or partial_tp_detected:
                                 state.partial_tp_done = True
                     else:
-                        # Position closed on Bybit
+                        # Position closed on Bybit (size = 0)
                         if state.position_side:
-                            logger.warning(f"[{symbol}] Position in state but not on Bybit - clearing state")
+                            logger.warning(f"[{symbol}] Position closed on Bybit (size=0) - saving to trade history")
+                            
+                            # Save position data before reset (inside lock for thread safety)
+                            entry_price = state.entry_price
+                            entry_time = state.entry_time
+                            position_side = state.position_side
+                            position_size = state.position_size
+                            
+                            # Reset state first (inside lock)
                             state.reset_position()
+                            
+                            # Mark that we need to save trade (outside lock)
+                            should_save_trade = True
                 else:
-                    # No position on Bybit
+                    # No position on Bybit (position was liquidated or closed externally)
                     if state.position_side:
-                        logger.warning(f"[{symbol}] Position in state but not on Bybit - clearing state")
+                        logger.warning(f"[{symbol}] Position in state but not on Bybit (liquidated/closed externally) - saving to trade history")
+                        
+                        # Save position data before reset (inside lock for thread safety)
+                        entry_price = state.entry_price
+                        entry_time = state.entry_time
+                        position_side = state.position_side
+                        position_size = state.position_size
+                        
+                        # Reset state first (inside lock)
                         state.reset_position()
+                        
+                        # Mark that we need to save trade (outside lock)
+                        should_save_trade = True
+            
+            # Save trade to history OUTSIDE lock (after lock is released)
+            if should_save_trade and entry_price and position_side and position_size:
+                # Get current price for exit
+                exit_price = await self._get_current_price_with_fallback(symbol)
+                if not exit_price:
+                    # Fallback to entry price if can't get current price
+                    exit_price = entry_price if entry_price else 0
+                
+                # Calculate PnL
+                pnl = 0.0
+                if entry_price and exit_price and position_size:
+                    try:
+                        pnl = self._calculate_pnl(position_side, entry_price, exit_price, position_size)
+                    except ValueError as e:
+                        # Fallback: calculate manually if _calculate_pnl fails
+                        logger.warning(f"[{symbol}] Error calculating PnL: {e}, using manual calculation")
+                        if position_side == "LONG":
+                            pnl = (exit_price - entry_price) * position_size
+                        else:  # SHORT
+                            pnl = (entry_price - exit_price) * position_size
+                
+                # Save to trade history
+                await self._add_trade(
+                    symbol=symbol,
+                    side=position_side,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    size=position_size,
+                    pnl=pnl,
+                    entry_time=entry_time
+                )
+                
+                logger.info(f"[{symbol}] 💾 Trade saved to history (liquidation/external close)")
+                logger.info(f"         Entry: {entry_price}, Exit: {exit_price}, PnL: {pnl:.2f} USDT")
+                
+                # Update equity
+                equity = self._calculate_current_equity()
+                if equity is not None:
+                    await self._add_equity_point(equity, force_add=True)
             
             self._record_api_success()
         
