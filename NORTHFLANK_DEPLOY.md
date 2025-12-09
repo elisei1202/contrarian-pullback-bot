@@ -18,14 +18,25 @@
 - **Dockerfile Path**: `Dockerfile`
 - **Region**: `eu-central-1` (Frankfurt, Germany) pentru IP european
 
-### 4. Configurează environment variables
-Adaugă următoarele variabile de mediu în Northflank:
+### 4. Configurează environment variables (MANUAL - OBLIGATORIU)
 
-**Obligatorii (secrete):**
-- `BYBIT_API_KEY` - Cheia ta Bybit API (marchează ca secret)
-- `BYBIT_API_SECRET` - Secretul tău Bybit API (marchează ca secret)
+**IMPORTANT:** Northflank nu importă automat variabilele din `northflank.yaml`. Trebuie să le adaugi manual în UI.
 
-**Configurare:**
+**Pași pentru a adăuga variabile:**
+
+1. În service-ul tău, mergi la secțiunea **"Environment"** (din sidebar-ul stâng)
+2. Click pe **"+ Add variable"** sau butonul similar
+3. Adaugă fiecare variabilă una câte una:
+
+**Obligatorii (trebuie create ca SECRETS):**
+- `BYBIT_API_KEY` - Cheia ta Bybit API
+  - Click pe "Create as secret" sau marchează ca "Secret"
+  - Valoare: cheia ta Bybit API
+- `BYBIT_API_SECRET` - Secretul tău Bybit API
+  - Click pe "Create as secret" sau marchează ca "Secret"
+  - Valoare: secretul tău Bybit API
+
+**Configurare (variabile normale):**
 - `BYBIT_TESTNET` = `false`
 - `SYMBOLS` = `BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT`
 - `POSITION_SIZE_USDT` = `100`
@@ -38,6 +49,8 @@ Adaugă următoarele variabile de mediu în Northflank:
 - `PORT` = `10000`
 - `CHECK_INTERVAL_SECONDS` = `300`
 - `UPDATE_4H_HOURS` = `4`
+
+**Notă:** După ce adaugi toate variabilele, click pe **"Save"** pentru a le aplica.
 
 ### 5. Configurează port și health check
 - **Port**: `10000`

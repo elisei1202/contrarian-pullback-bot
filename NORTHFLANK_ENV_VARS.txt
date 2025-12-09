@@ -1,0 +1,45 @@
+# Environment Variables pentru Northflank
+# Copiază aceste variabile și adaugă-le manual în Northflank UI
+
+# ============================================
+# SECRETS (marchează ca "Secret" în Northflank)
+# ============================================
+BYBIT_API_KEY=GfFbCkH19QG3iEa2Br
+BYBIT_API_SECRET=qxAj1mmsUKwcQYyqZAUjQUTRsotE8D9rUVfa
+
+# ============================================
+# VARIABILE NORMALE
+# ============================================
+BYBIT_TESTNET=false
+SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT
+POSITION_SIZE_USDT=100
+LEVERAGE=20
+EMA_PERIOD_4H=200
+ST_PERIOD_4H=10
+ST_MULTIPLIER_4H=3.0
+ST_PERIOD_1H=10
+ST_MULTIPLIER_1H=3.0
+PORT=10000
+CHECK_INTERVAL_SECONDS=300
+UPDATE_4H_HOURS=4
+
+# ============================================
+# INSTRUCȚIUNI:
+# ============================================
+# 1. Mergi în Northflank → Service "bot" → Environment
+# 2. Pentru BYBIT_API_KEY și BYBIT_API_SECRET:
+#    - Click "+ Add variable"
+#    - Nume: BYBIT_API_KEY
+#    - Valoare: GfFbCkH19QG3iEa2Br
+#    - Marchează ca "Secret" (toggle sau checkbox)
+#    - Save
+#    - Repetă pentru BYBIT_API_SECRET
+# 3. Pentru restul variabilelor:
+#    - Click "+ Add variable"
+#    - Nume: (ex. BYBIT_TESTNET)
+#    - Valoare: (ex. false)
+#    - NU marchează ca Secret
+#    - Save
+#    - Repetă pentru toate variabilele
+# 4. Click "Save" la final pentru a aplica toate modificările
+
