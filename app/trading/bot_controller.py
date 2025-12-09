@@ -348,6 +348,110 @@ class BotController:
         
         return True
     
+    def _validate_position_size(self, position_size: Optional[float], symbol: str = "") -> bool:
+        """
+        Validate that position size is positive
+        
+        Centralized validation to avoid code duplication.
+        
+        Args:
+            position_size: Position size to validate
+            symbol: Optional symbol for logging
+        
+        Returns:
+            True if position size is valid, False otherwise
+        """
+        if position_size is None or position_size <= 0:
+            if symbol:
+                logger.error(f"[{symbol}] Invalid position_size: {position_size}")
+            return False
+        return True
+    
+    def _calculate_size_ratio(self, actual_size: float, original_size: float) -> Optional[float]:
+        """
+        Calculate size ratio between actual and original position size
+        
+        Centralized calculation to avoid code duplication.
+        
+        Args:
+            actual_size: Current position size
+            original_size: Original position size
+        
+        Returns:
+            float: Size ratio (actual/original), or None if invalid
+        """
+        if not original_size or original_size <= 0:
+            return None
+        if actual_size < 0:
+            return None
+        return actual_size / original_size
+    
+    def _calculate_partial_qty(self, position_size: float, percentage: float = 0.5) -> float:
+        """
+        Calculate partial quantity to close (default 50%)
+        
+        Centralized calculation to avoid code duplication.
+        
+        Args:
+            position_size: Total position size
+            percentage: Percentage to close (default 0.5 for 50%)
+        
+        Returns:
+            float: Quantity to close
+        """
+        return position_size * percentage
+    
+    async def _get_execution_price_from_recent_executions(
+        self, 
+        symbol: str, 
+        position_side: str, 
+        time_window_seconds: int = 300
+    ) -> Optional[float]:
+        """
+        Get execution price from recent executions
+        
+        Centralized method to avoid code duplication.
+        
+        Args:
+            symbol: Trading pair
+            position_side: Position side ("LONG" or "SHORT")
+            time_window_seconds: Time window to search (default 300 = 5 minutes)
+        
+        Returns:
+            float: Execution price if found, None otherwise
+        """
+        try:
+            executions = await self.client.get_recent_executions(symbol, limit=10)
+            if not executions:
+                return None
+            
+            exit_side_bybit = self._get_exit_side_bybit(position_side)
+            current_time = datetime.now().timestamp()
+            
+            for exec_item in executions:
+                exec_side = exec_item.get("side", "")
+                exec_time_str = exec_item.get("execTime", "0")
+                
+                try:
+                    exec_time = int(exec_time_str) / 1000  # Convert to seconds
+                    time_diff = current_time - exec_time
+                    
+                    if time_diff < time_window_seconds and exec_side == exit_side_bybit:
+                        exec_price_str = exec_item.get("execPrice", "0")
+                        try:
+                            exec_price = float(exec_price_str)
+                            if exec_price > 0:
+                                logger.info(f"[{symbol}] Found execution price from recent executions: {exec_price}")
+                                return exec_price
+                        except (ValueError, TypeError):
+                            continue
+                except (ValueError, TypeError):
+                    continue
+        except Exception as e:
+            logger.debug(f"[{symbol}] Error getting execution price from recent executions: {e}")
+        
+        return None
+    
     def _calculate_required_margin(self, buffer_multiplier: float = 1.5) -> float:
         """
         Calculate required margin with buffer for order placement
@@ -363,38 +467,40 @@ class BotController:
     
     def _calculate_tp_target_profit(self, partial_percentage: float = 0.5) -> float:
         """
-        Calculate target profit for partial TP (margin + fees)
+        Calculate target profit for partial TP (full margin + fees)
         
-        This method calculates the target profit for partial take profit orders.
-        The target is set to cover the margin used plus trading fees (0.2% total).
-        This ensures we at least break even on fees when taking partial profit.
+        When closing 50% of position, profit should equal the ENTIRE margin used to enter
+        the position, not just the margin for 50% of position.
         
-        For partial TP (50% of position), the target profit is calculated for the
-        partial position size, not the full position.
+        This ensures that when partial TP executes, you recover the entire sum you entered with,
+        plus trading fees.
         
         Formula:
-            margin = (position_size_usdt * partial_percentage) / leverage
-            fees = margin * 0.002 (0.1% entry + 0.1% exit)
-            target = margin + fees
+            margin_total = position_size_usdt / leverage (entire margin used to enter)
+            fees = (position_size_usdt * partial_percentage) * 0.002
+            target = margin_total + fees
         
         Args:
             partial_percentage: Percentage of position to close (default 0.5 for 50%)
         
         Returns:
-            float: Target profit in USDT for the partial position
+            float: Target profit in USDT (entire margin + fees)
         
         Example:
             If position_size_usdt = 100, leverage = 20, partial_percentage = 0.5:
-            - partial_size = 50 USDT
-            - margin = 50 / 20 = 2.5 USDT
-            - fees = 2.5 * 0.002 = 0.005 USDT
-            - target = 2.505 USDT
+            - margin_total = 100 / 20 = 5 USDT (entire margin used to enter)
+            - fees = 50 * 0.002 = 0.1 USDT (fees on 50% of position)
+            - target = 5 + 0.1 = 5.1 USDT
         """
-        # ===== FIX 1.1: Calculate profit for partial position =====
+        # Calculate TOTAL margin used to enter the position (entire sum you entered with)
+        margin_total = self.config.trading.position_size_usdt / self.config.trading.leverage
+        
+        # Fees are calculated on the partial position value being closed
         partial_position_size = self.config.trading.position_size_usdt * partial_percentage
-        margin_without_leverage = partial_position_size / self.config.trading.leverage
-        fees = margin_without_leverage * 0.002  # 0.2% total (entry + exit)
-        return margin_without_leverage + fees
+        fees = partial_position_size * 0.002  # 0.2% total (entry + exit)
+        
+        # Target profit = entire margin you entered with + fees
+        return margin_total + fees
     
     def _calculate_tp_target_price(
         self,
@@ -624,7 +730,9 @@ class BotController:
                                o.get("orderStatus") in ["New", "PartiallyFilled"]
                         ]
                         if tp_orders:
-                            state.tp_limit_order_id = tp_orders[0].get("orderId")
+                            # ===== FIX: Set tp_limit_order_id with lock for thread safety =====
+                            async with self._state_lock:
+                                state.tp_limit_order_id = tp_orders[0].get("orderId")
                             logger.info(f"[{symbol}] Found existing TP limit order: {state.tp_limit_order_id}")
                         else:
                             # Place TP order for existing position
@@ -1219,29 +1327,7 @@ class BotController:
                             state.open_position(actual_side, actual_size, actual_entry_price)
                         elif state.position_side != actual_side or abs((state.position_size or 0) - actual_size) > 0.0001:
                             logger.warning(f"[{symbol}] Position mismatch - updating state from Bybit")
-                            
-                            # ===== FIX 6.2: Detect if position was partially closed manually =====
-                            # If actual_size is approximately 50% of original, treat as partial TP executed
-                            if state.position_size and state.position_size > 0:
-                                size_ratio = actual_size / state.position_size
-                                # Check if size is approximately 50% (with 5% tolerance)
-                                if 0.45 <= size_ratio <= 0.55 and not state.partial_tp_done:
-                                    logger.info(f"[{symbol}] Detected partial position close (manual) - treating as TP executed")
-                                    # Calculate approximate exit price and PnL for manual partial close
-                                    # Use current price as approximation since we don't have execution history
-                                    current_price = await self._get_current_price_with_fallback(symbol)
-                                    if current_price and current_price > 0:
-                                        # Use current price as exit price approximation for manual partial close
-                                        await self._handle_partial_tp_executed(symbol, state, actual_size, exit_price_override=current_price)
-                                    else:
-                                        # Fallback: just mark as done without PnL calculation
-                                        logger.warning(f"[{symbol}] Cannot get current price for manual partial close PnL calculation")
-                                        async with self._state_lock:
-                                            state.partial_tp_done = True
-                                            state.tp_limit_order_id = None
-                                            # Update position size
-                                            state.position_size = actual_size
-                            
+                            # Note: Manual partial close detection is handled in _check_partial_tp
                             state.open_position(actual_side, actual_size, actual_entry_price)
                     else:
                         # Position closed on Bybit
@@ -1549,13 +1635,15 @@ class BotController:
             
             if tp_orders:
                 logger.debug(f"[{symbol}] TP limit order already exists, skipping")
-                state.tp_limit_order_id = tp_orders[0].get("orderId")
+                # ===== FIX: Set tp_limit_order_id with lock for thread safety =====
+                async with self._state_lock:
+                    state.tp_limit_order_id = tp_orders[0].get("orderId")
                 return
             
             # ===== FIX: Use centralized TP calculation =====
             target_profit = self._calculate_tp_target_profit()
             
-            qty_partial = state.position_size * 0.5
+            qty_partial = self._calculate_partial_qty(state.position_size, percentage=0.5)
             
             # ===== IMPORTANT FIX 2: Correct TP calculation for SHORT positions =====
             # For SHORT: profit = (entry_price - exit_price) * qty
@@ -1674,8 +1762,7 @@ class BotController:
                 logger.error(f"[{symbol}] Invalid actual_size for partial TP: {actual_size}")
                 return
             
-            if not state.position_size or state.position_size <= 0:
-                logger.error(f"[{symbol}] Invalid position_size for partial TP: {state.position_size}")
+            if not self._validate_position_size(state.position_size, symbol):
                 return
             
             if not state.entry_price or state.entry_price <= 0:
@@ -1734,7 +1821,7 @@ class BotController:
                 state.total_pnl += partial_pnl
                 state.position_size = actual_size
                 state.partial_tp_done = True
-                # ===== FIX 3: Use centralized method (already in lock, but for consistency) =====
+                # ===== FIX: Clear TP order ID (already in lock, direct assignment is safe) =====
                 state.tp_limit_order_id = None
             
             self._add_trade(
@@ -1761,13 +1848,14 @@ class BotController:
     
     async def _check_partial_tp(self, symbol: str, state: SymbolState):
         """
-        Check for partial take profit
+        Check for partial take profit (LIMIT ORDER ONLY)
         
         This method checks if partial TP conditions are met:
         1. If TP limit order exists, verify if it was executed
-        2. If no TP order, check if unrealized PnL reached target (fallback)
+        2. If no TP order exists and partial TP not done, place a new limit order
         
-        Partial TP closes 50% of position when target profit (margin + fees) is reached.
+        Partial TP closes 50% of position when target profit (full margin + fees) is reached.
+        Uses ONLY limit orders - no market orders.
         
         Args:
             symbol: Trading pair
@@ -1802,8 +1890,7 @@ class BotController:
                             return
                         
                         # ===== MEDIUM FIX 3: Add edge case validation =====
-                        if state.position_size is None or state.position_size <= 0:
-                            logger.warning(f"[{symbol}] Invalid state.position_size for TP check")
+                        if not self._validate_position_size(state.position_size, symbol):
                             return
                         
                         if actual_size < state.position_size * 0.6:
@@ -1815,91 +1902,39 @@ class BotController:
                             # ===== FIX 5.1: Order was cancelled (not executed) - reset tp_limit_order_id =====
                             # Position size is still close to original (>95%), so order was cancelled
                             logger.info(f"[{symbol}] TP limit order was cancelled (not executed) - resetting order ID")
-                            async with self._state_lock:
-                                state.tp_limit_order_id = None
+                            await self._clear_tp_order_id(state)
                             return
                         else:
                             # Position size changed but not by 50% - might be manual partial close
                             # Check if it's approximately 50% reduction
-                            size_ratio = actual_size / state.position_size
-                            if 0.45 <= size_ratio <= 0.55:
+                            size_ratio = self._calculate_size_ratio(actual_size, state.position_size)
+                            if size_ratio is not None and 0.45 <= size_ratio <= 0.55:
                                 # It's a partial close - treat as TP executed
                                 logger.info(f"[{symbol}] Detected partial position close (size ratio: {size_ratio:.2%}) - treating as TP executed")
                                 
                                 # ===== CRITICAL FIX: Try to get real execution price from recent executions =====
-                                exit_price_override = None
-                                try:
-                                    # Get recent executions to find the execution price
-                                    executions = await self.client.get_recent_executions(symbol, limit=10)
-                                    if executions:
-                                        # Find the most recent execution that matches our position side
-                                        exit_side_bybit = self._get_exit_side_bybit(state.position_side)
-                                        for exec_item in executions:
-                                            exec_side = exec_item.get("side", "")
-                                            exec_time_str = exec_item.get("execTime", "0")
-                                            
-                                            # Check if execution is recent (within last 5 minutes) and matches our side
-                                            try:
-                                                exec_time = int(exec_time_str) / 1000  # Convert to seconds
-                                                current_time = datetime.now().timestamp()
-                                                time_diff = current_time - exec_time
-                                                
-                                                if time_diff < 300 and exec_side == exit_side_bybit:  # Within 5 minutes
-                                                    exec_price_str = exec_item.get("execPrice", "0")
-                                                    try:
-                                                        exec_price = float(exec_price_str)
-                                                        if exec_price > 0:
-                                                            exit_price_override = exec_price
-                                                            logger.info(f"[{symbol}] Found execution price from recent executions: {exit_price_override}")
-                                                            break
-                                                    except (ValueError, TypeError):
-                                                        continue
-                                            except (ValueError, TypeError):
-                                                continue
-                                except Exception as e:
-                                    logger.debug(f"[{symbol}] Error getting execution price from recent executions: {e}")
+                                exit_price_override = await self._get_execution_price_from_recent_executions(
+                                    symbol, state.position_side, time_window_seconds=300
+                                )
                                 
                                 await self._handle_partial_tp_executed(symbol, state, actual_size, exit_price_override=exit_price_override)
                             else:
                                 # Position changed but not a clear partial TP - just reset order ID
                                 logger.warning(f"[{symbol}] Position size changed unexpectedly (ratio: {size_ratio:.2%}) - resetting TP order ID")
-                                async with self._state_lock:
-                                    state.tp_limit_order_id = None
+                                await self._clear_tp_order_id(state)
                             return
                     else:
                         # ===== FIX 5.1: Position closed, reset TP order ID =====
-                        async with self._state_lock:
-                            state.tp_limit_order_id = None
+                        await self._clear_tp_order_id(state)
                         return
             except Exception as e:
                 logger.error(f"[{symbol}] Error checking TP order status: {e}")
-                # Don't return - continue with fallback check
+                return
         
-        # Fallback: manual check
-        # ===== FIX 5.1: Check if partial_tp_done before manual check =====
-        if state.partial_tp_done:
-            return  # Already done, skip
-        
-        current_price = await self._get_current_price_with_fallback(symbol)
-        if not current_price:
-            return
-        
-        unrealized_pnl = state.get_unrealized_pnl(current_price)
-        target_profit = self._calculate_tp_target_profit()
-        
-        if unrealized_pnl >= target_profit:
-            logger.info("=" * 60)
-            logger.info(f"[{symbol}] 🎯 PARTIAL TAKE PROFIT (manual check)")
-            logger.info(f"         Unrealized PnL: {unrealized_pnl:.2f} USDT")
-            logger.info(f"         Target: {target_profit:.2f} USDT")
-            logger.info("=" * 60)
-            
-            await self._partial_exit_position(symbol, state, percentage=0.5)
-            
-            async with self._state_lock:
-                state.partial_tp_done = True
-                # ===== FIX 3: Already in lock, but using same pattern =====
-                state.tp_limit_order_id = None
+        # If no TP order exists and partial TP not done, place limit order
+        if not state.tp_limit_order_id and not state.partial_tp_done:
+            logger.info(f"[{symbol}] No TP limit order found - placing new limit order")
+            await self._place_partial_tp_limit_order(symbol, state)
     
     async def _adjust_qty_to_step_size(self, symbol: str, qty: float) -> float:
         """Adjust quantity to symbol's step size"""
@@ -1959,135 +1994,11 @@ class BotController:
             logger.error(f"Error adjusting price to tick size for {symbol}: {e}")
             return price
     
-    async def _partial_exit_position(self, symbol: str, state: SymbolState, percentage: float = 0.5):
-        """Close partial position"""
-        try:
-            if not state.position_side or not state.position_size:
-                return
-            
-            qty_to_close = state.position_size * percentage
-            
-            # ===== MEDIUM FIX 2: Use centralized exit side conversion =====
-            side = self._get_exit_side_bybit(state.position_side)
-            
-            # ===== MEDIUM FIX 4: Add null/None validation =====
-            if state.position_size is None or state.position_size <= 0:
-                logger.error(f"[{symbol}] Invalid position_size for partial exit: {state.position_size}")
-                return
-            
-            qty = await self._adjust_qty_to_step_size(symbol, qty_to_close)
-            
-            if qty > state.position_size:
-                qty = state.position_size
-            
-            order = await self.client.place_order(
-                symbol=symbol,
-                side=side,
-                qty=qty,
-                order_type="Market",
-                reduce_only=True
-            )
-            
-            if not order:
-                logger.error(f"[{symbol}] Partial exit order placement failed")
-                return
-            
-            if isinstance(order, dict) and order.get("retCode") != 0:
-                error_msg = order.get("retMsg", "Unknown error")
-                logger.error(f"[{symbol}] Partial exit order failed: {error_msg}")
-                return
-            
-            # ===== CRITICAL FIX: Get real execution price and quantity from API =====
-            await asyncio.sleep(1)  # Wait for order execution
-            
-            # Get order ID from response
-            result = order.get("result", {})
-            order_id = result.get("orderId") if result else order.get("orderId")
-            
-            # Try to get real execution price and quantity
-            exit_price = None
-            actual_qty_executed = qty  # Default to requested qty
-            
-            if order_id:
-                execution_price = await self.client.get_order_execution_price(symbol, order_id)
-                if execution_price and execution_price > 0:
-                    exit_price = execution_price
-                    logger.info(f"[{symbol}] Using real execution price from API: {exit_price}")
-                    
-                    # Get actual executed quantity from execution list
-                    executions = await self.client.get_recent_executions(symbol, limit=5)
-                    for exec_item in executions:
-                        if exec_item.get("orderId") == order_id:
-                            exec_qty_str = exec_item.get("execQty", "0")
-                            try:
-                                exec_qty = float(exec_qty_str)
-                                if exec_qty > 0:
-                                    actual_qty_executed = exec_qty
-                                    logger.info(f"[{symbol}] Actual executed quantity: {actual_qty_executed} (requested: {qty})")
-                                    break
-                            except (ValueError, TypeError):
-                                pass
-            
-            # Fallback to current price if execution price not available
-            if exit_price is None or exit_price <= 0:
-                logger.warning(f"[{symbol}] Execution price not available, using current price as fallback")
-                exit_price = await self._get_current_price_with_fallback(symbol)
-                if not exit_price:
-                    logger.error(f"[{symbol}] Cannot get ticker price for partial exit")
-                    return
-            
-            # Sync with Bybit to get actual position size
-            position = await self.client.get_position(symbol)
-            async with self._state_lock:
-                if position:
-                    # ===== MINOR FIX 2: Use centralized parsing method =====
-                    actual_size = self._parse_position_size_from_api(position, symbol)
-                    if actual_size is None:
-                        state.reset_position()
-                        return
-                    
-                    state.position_size = actual_size
-                else:
-                    state.reset_position()
-                    logger.warning(f"[{symbol}] Position fully closed after partial exit")
-                    return
-                
-                # ===== CRITICAL FIX: Calculate PnL using actual executed quantity =====
-                # Use actual_qty_executed instead of requested qty for accurate PnL
-                try:
-                    partial_pnl = self._calculate_pnl(state.position_side, state.entry_price, exit_price, actual_qty_executed)
-                except ValueError as e:
-                    logger.error(f"[{symbol}] Cannot calculate PnL: {e}")
-                    partial_pnl = 0
-                
-                # ===== MEDIUM FIX 3: Add edge case validation =====
-                if partial_pnl is not None:
-                    state.total_pnl += partial_pnl
-            
-            if state.entry_price and state.position_side:
-                self._add_trade(
-                    symbol=symbol,
-                    side=state.position_side,
-                    entry_price=state.entry_price,
-                    exit_price=exit_price,
-                    size=actual_qty_executed,  # Use actual executed quantity
-                    pnl=partial_pnl,
-                    entry_time=state.entry_time,
-                    is_partial=True
-                )
-            
-            equity = self._calculate_current_equity()
-            if equity is not None:
-                self._add_equity_point(equity, force_add=True)
-            
-            logger.info(f"[{symbol}] ✅ Partial position closed ({percentage*100:.0f}%)")
-            logger.info(f"         Closed: {actual_qty_executed} @ {exit_price} (requested: {qty})")
-            logger.info(f"         Partial PnL: {partial_pnl:.2f} USDT")
-            self._record_api_success()
-            
-        except Exception as e:
-            logger.error(f"Error in partial exit for {symbol}: {e}", exc_info=True)
-            self._record_api_failure()
+    # NOTE: _partial_exit_position is currently unused (fallback market order removed)
+    # Kept for potential future use or manual partial exits
+    # async def _partial_exit_position(self, symbol: str, state: SymbolState, percentage: float = 0.5):
+    #     """Close partial position (currently unused - partial TP uses only limit orders)"""
+    #     ...
     
     async def _check_exit(self, symbol: str, state: SymbolState):
         """
@@ -2307,8 +2218,7 @@ class BotController:
                 logger.error(f"[{symbol}] Cannot exit - missing position data (side: {state.position_side}, entry: {state.entry_price}, size: {state.position_size})")
                 return
             
-            if state.position_size <= 0:
-                logger.error(f"[{symbol}] Cannot exit - invalid position_size: {state.position_size}")
+            if not self._validate_position_size(state.position_size, symbol):
                 return
             
             side = self._get_exit_side_bybit(state.position_side)
@@ -2465,7 +2375,7 @@ class BotController:
                 tp_target_price = None
                 if state.position_size and state.entry_price and state.position_side:
                     target_profit = self._calculate_tp_target_profit()
-                    qty_partial = state.position_size * 0.5
+                    qty_partial = self._calculate_partial_qty(state.position_size, percentage=0.5)
                     tp_target_price = self._calculate_tp_target_price(
                         state.position_side,
                         state.entry_price,
