@@ -1087,10 +1087,23 @@ class BotController:
                 await self._update_4h_trend(symbol, state)
                 self.last_4h_update[symbol] = datetime.now()
             
-            # 2. Update 1H signal (for display only - entry uses confirmed candles)
+            # 2. Update 1H signal (for display and entry check)
             await self._update_1h_signal(symbol, state)
             
-            # NOTE: Entry check is NOT done here - only on confirmed 1H candle via WebSocket
+            # 2.5. Check for entry if contrarian conditions are met (periodic check)
+            # This ensures we don't miss entry signals even if WebSocket didn't receive the confirmed candle update
+            if not state.position_side and self.trading_enabled:
+                # Check if contrarian signal exists (same logic as Web UI)
+                if state._is_contrarian():
+                    # Ensure we have confirmed 1H signal before entry
+                    await self._update_1h_signal_from_rest(symbol, state)
+                    
+                    # Check entry if still contrarian after REST update
+                    if state._is_contrarian():
+                        logger.info(f"[{symbol}] 🔍 Periodic check: Contrarian signal detected, checking entry...")
+                        await self._check_entry(symbol, state)
+            
+            # NOTE: Entry check is also done on confirmed 1H candle via WebSocket (primary method)
             
             # 3. Check for partial TP
             if state.position_side and not state.partial_tp_done:
