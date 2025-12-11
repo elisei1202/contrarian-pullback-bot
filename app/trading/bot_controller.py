@@ -923,6 +923,11 @@ class BotController:
             
             # 1H candle update - update 1H signal
             elif interval == "60":
+                # Log when confirmed 1H candle is received
+                if is_confirmed:
+                    candle_time = datetime.fromtimestamp(int(candle[0]) / 1000) if candle and len(candle) > 0 else None
+                    logger.info(f"[{symbol}] ✅ 1H candle CONFIRMED (closed) - timestamp: {candle[0] if candle else 'N/A'}, time: {candle_time}")
+                
                 if is_confirmed:
                     has_ws_data = await self.websocket.has_klines(symbol, "60")
                     if has_ws_data:
@@ -934,12 +939,27 @@ class BotController:
                 
                 # Check for entry ONLY on confirmed (closed) 1H candle
                 if is_confirmed and not state.position_side and self.trading_enabled:
+                    logger.info(f"[{symbol}] 🔍 Checking entry after 1H candle close...")
+                    logger.info(f"[{symbol}]    Current state: trend_4h={state.trend_4h}, st_1h={state.st_1h_direction}, position={state.position_side}")
+                    
                     if not state.st_1h_direction:
+                        logger.info(f"[{symbol}]    Updating 1H signal from REST (not available)...")
                         await self._update_1h_signal_from_rest(symbol, state)
-                    await self._check_entry(symbol, state)
+                        logger.info(f"[{symbol}]    After REST update: st_1h={state.st_1h_direction}")
+                    
+                    if state.st_1h_direction:
+                        logger.info(f"[{symbol}]    Calling _check_entry...")
+                        await self._check_entry(symbol, state)
+                    else:
+                        logger.warning(f"[{symbol}]    ⚠️ Cannot check entry: 1H signal still not available after REST update")
+                elif is_confirmed:
+                    if state.position_side:
+                        logger.debug(f"[{symbol}] Skipping entry check: already in position ({state.position_side})")
+                    elif not self.trading_enabled:
+                        logger.debug(f"[{symbol}] Skipping entry check: trading disabled")
         
         except Exception as e:
-            logger.error(f"Error handling kline update for {symbol} {interval}: {e}")
+            logger.error(f"Error handling kline update for {symbol} {interval}: {e}", exc_info=True)
     
     async def _handle_price_update(self, symbol: str, price: float):
         """Handle real-time price update from WebSocket"""
@@ -1650,6 +1670,8 @@ class BotController:
         - LONG: When 4H trend is BULLISH and 1H SuperTrend is RED (buy the dip)
         - SHORT: When 4H trend is BEARISH and 1H SuperTrend is GREEN (sell the rip)
         """
+        logger.info(f"[{symbol}] 🔍 _check_entry called - trend_4h={state.trend_4h}, st_1h={state.st_1h_direction}")
+        
         # Double-check position first
         if state.position_side:
             logger.debug(f"[{symbol}] Already in position ({state.position_side}), skipping entry check")
@@ -1657,6 +1679,7 @@ class BotController:
         
         # Check circuit breaker
         if self._is_circuit_breaker_active():
+            logger.warning(f"[{symbol}] ⚠️ Circuit breaker active, skipping entry")
             return
         
         # Count total open positions
@@ -1664,18 +1687,20 @@ class BotController:
             total_open_positions = sum(1 for s in self.states.values() if s.position_side)
         
         if total_open_positions >= 8:
-            logger.debug(f"[{symbol}] Maximum positions reached ({total_open_positions}/8), skipping entry check")
+            logger.warning(f"[{symbol}] ⚠️ Maximum positions reached ({total_open_positions}/8), skipping entry check")
             return
         
         if not state.trend_4h or state.trend_4h == "NEUTRAL":
-            logger.debug(f"[{symbol}] No valid 4H trend ({state.trend_4h}), skipping entry check")
+            logger.warning(f"[{symbol}] ⚠️ No valid 4H trend ({state.trend_4h}), skipping entry check")
             return
         
         # Ensure we have confirmed 1H signal before entry
-        await self._update_1h_signal_from_rest(symbol, state)
+        if not state.st_1h_direction:
+            logger.info(f"[{symbol}] Updating 1H signal from REST before entry check...")
+            await self._update_1h_signal_from_rest(symbol, state)
         
         if not state.st_1h_direction:
-            logger.debug(f"[{symbol}] 1H signal not available after REST update, skipping entry check")
+            logger.warning(f"[{symbol}] ⚠️ 1H signal not available after REST update, skipping entry check")
             return
         
         signal = self.contrarian.check_entry_signal(
@@ -1684,30 +1709,33 @@ class BotController:
         )
         
         if not signal:
-            logger.debug(f"[{symbol}] No contrarian signal (4H: {state.trend_4h}, 1H: {state.st_1h_direction})")
+            logger.info(f"[{symbol}] ℹ️ No contrarian signal (4H: {state.trend_4h}, 1H: {state.st_1h_direction})")
             return
         
         if not self.trading_enabled:
-            logger.debug(f"[{symbol}] Trading disabled, skipping entry")
+            logger.warning(f"[{symbol}] ⚠️ Trading disabled, skipping entry")
             return
         
         # ===== PROTECȚIE: Verifică SuperTrend 4H pe lumânarea live =====
         # Previne intrările greșite când trend-ul s-a schimbat deja pe live
+        logger.info(f"[{symbol}] Checking 4H SuperTrend live consistency...")
         trend_consistent = await self._check_4h_supertrend_live(symbol, state)
         if not trend_consistent:
-            logger.warning(f"[{symbol}] Entry blocked: SuperTrend 4H changed on live candle (protection active)")
+            logger.warning(f"[{symbol}] ⚠️ Entry blocked: SuperTrend 4H changed on live candle (protection active)")
             return
         
         # Quick balance check
+        logger.info(f"[{symbol}] Checking account balance...")
         await self._update_account_balance()
         if not self.account_balance:
-            logger.warning(f"[{symbol}] Cannot get account balance, skipping entry")
+            logger.warning(f"[{symbol}] ⚠️ Cannot get account balance, skipping entry")
             return
         
         required_margin = self._calculate_required_margin()
+        logger.info(f"[{symbol}] Balance: {self.account_balance:.2f} USDT, Required: {required_margin:.2f} USDT")
             
         if self.account_balance < required_margin:
-            logger.warning(f"[{symbol}] Insufficient balance: {self.account_balance:.2f} USDT < {required_margin:.2f} USDT")
+            logger.warning(f"[{symbol}] ⚠️ Insufficient balance: {self.account_balance:.2f} USDT < {required_margin:.2f} USDT")
             return
         
         logger.info("=" * 60)
