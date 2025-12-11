@@ -1763,6 +1763,10 @@ class BotController:
     
     async def _place_partial_tp_limit_order(self, symbol: str, state: SymbolState):
         """Place limit order for partial take profit (50% at margin + fees target)"""
+        # Partial TP is disabled
+        logger.debug(f"[{symbol}] Partial TP placement is disabled, skipping")
+        return
+        
         try:
             if not state.position_side or not state.entry_price or not state.position_size:
                 return
