@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contrarian Pullback Bot - Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --cyan: #06b6d4;
+            --bg: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            --bg-card: rgba(30, 41, 59, 0.6);
+            --bg-hover: rgba(51, 65, 85, 0.8);
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: rgba(148, 163, 184, 0.2);
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            background-attachment: fixed;
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        /* Navigation */
+        .navbar {
+            background: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .navbar-nav {
+            display: flex;
+            gap: 1.5rem;
+            list-style: none;
+        }
+        
+        .nav-link {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
+            padding: 0.5rem 0;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            color: var(--primary);
+        }
+        
+        /* Live Indicators */
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: rgba(16, 185, 129, 0.1);
+        }
+        
+        .led-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+            box-shadow: 0 0 8px var(--success);
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+        
+        .led-dot.off {
+            background: #64748b;
+            box-shadow: none;
+            animation: none;
+        }
+        
+        /* Container */
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        /* Header Stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary), var(--cyan));
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--primary);
+            box-shadow: 0 8px 24px rgba(99, 102, 241, 0.2);
+        }
+        
+        .stat-card:hover::before {
+            opacity: 1;
+        }
+        
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text);
+        }
+        
+        .stat-change {
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+        }
+        
+        .stat-change.positive { color: var(--success); }
+        .stat-change.negative { color: var(--danger); }
+        
+        /* Main Content Grid */
+        .content-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        @media (max-width: 1024px) {
+            .content-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        /* Card */
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }
+        
+        .card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 8px 24px rgba(99, 102, 241, 0.15);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        /* Equity Chart */
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-top: 1rem;
+        }
+        
+        /* Controls */
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .btn {
+            padding: 1rem 1.5rem;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 1rem;
+            width: 100%;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(99, 102, 241, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, var(--danger), #dc2626);
+            color: white;
+        }
+        
+        .status-info {
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+        
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 1rem 0;
+            padding: 0.75rem;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+        
+        .status-row:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        
+        .status-label {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        
+        .status-value {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+        }
+        
+        /* Positions Table */
+        .positions-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .positions-table th {
+            text-align: left;
+            padding: 1rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.875rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .positions-table td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .positions-table tr:hover {
+            background: var(--bg-hover);
+        }
+        
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .badge-bullish { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .badge-bearish { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        .badge-neutral { background: rgba(107, 114, 128, 0.2); color: var(--text-muted); }
+        .badge-long { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .badge-short { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        
+        .symbol-chart-link {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-size: 1.25rem;
+        }
+        
+        .symbol-chart-link:hover {
+            background: rgba(99, 102, 241, 0.2);
+            transform: scale(1.1);
+        }
+        
+        .symbol-card {
+            cursor: pointer;
+        }
+        
+        .symbol-card:hover .symbol-chart-link {
+            background: rgba(99, 102, 241, 0.3);
+        }
+        
+        .indicator-icon {
+            font-size: 1.25rem;
+            margin-right: 0.5rem;
+        }
+        
+        /* Symbols Grid */
+        .symbols-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        /* Optimize for 8 symbols - 2 rows of 4 on large screens */
+        @media (min-width: 1400px) {
+            .symbols-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .symbols-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .symbol-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        
+        .symbol-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--primary);
+            box-shadow: 0 8px 24px rgba(99, 102, 241, 0.2);
+        }
+        
+        .symbol-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .symbol-name {
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+        
+        .indicator-group {
+            margin: 1rem 0;
+            padding: 1rem;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+        }
+        
+        .indicator-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 0.5rem 0;
+            font-size: 0.875rem;
+        }
+        
+        .signal-active {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(245, 158, 11, 0.1));
+            color: var(--warning);
+            padding: 0.75rem;
+            border-radius: 12px;
+            font-weight: 600;
+            margin-top: 1rem;
+            text-align: center;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+        
+        .position-info {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(99, 102, 241, 0.05));
+            border-radius: 12px;
+            border-left: 3px solid var(--primary);
+        }
+        
+        .pnl {
+            font-size: 1.125rem;
+            font-weight: 700;
+            margin-top: 0.5rem;
+        }
+        
+        .pnl.positive { color: var(--success); }
+        .pnl.negative { color: var(--danger); }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">🎯 Contrarian Bot</a>
+        <ul class="navbar-nav">
+            <li><a href="/" class="nav-link active">Dashboard</a></li>
+            <li><a href="/positions" class="nav-link">Positions</a></li>
+            <li><a href="/mobile" class="nav-link">Mobile</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <!-- Header Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">
+                    <span>💰</span> Total Equity
+                </div>
+                <div class="stat-value" id="total-equity">$0.00</div>
+                <div class="stat-change" id="equity-change">+0.00%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">
+                    <span>📊</span> Total PnL
+                </div>
+                <div class="stat-value" id="total-pnl">$0.00</div>
+                <div class="stat-change" id="pnl-change">+0.00%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">
+                    <span>🎯</span> Win Rate
+                </div>
+                <div class="stat-value" id="win-rate">0%</div>
+                <div class="stat-change" id="total-trades">0 trades</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">
+                    <span>📈</span> Open Positions
+                </div>
+                <div class="stat-value" id="open-positions">0</div>
+                <div class="stat-change">Active</div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="content-grid">
+            <!-- Left: Equity Chart -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <span>📈</span> Equity Curve
+                    </h2>
+                    <div class="live-indicator" id="ws-status-badge">
+                        <span class="led-dot off"></span>
+                        <span>CONNECTING...</span>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="equityChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Right: Controls -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <span>⚙️</span> Controls
+                    </h2>
+                </div>
+                <div class="controls">
+                    <button class="btn btn-primary" id="trading-btn" onclick="toggleTrading()">
+                        <span id="trading-status">Trading ON - Push to stop trading</span>
+                    </button>
+                </div>
+                <div class="status-info">
+                    <div class="status-row">
+                        <span class="status-label">Bot Status:</span>
+                        <div class="status-value">
+                            <div class="live-indicator" id="bot-status-indicator">
+                                <span class="led-dot off"></span>
+                                <span id="bot-status-text">STOPPED</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">WebSocket:</span>
+                        <div class="status-value">
+                            <div class="live-indicator" id="ws-status-indicator">
+                                <span class="led-dot off"></span>
+                                <span id="ws-status-text">DISCONNECTED</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Last Update:</span>
+                        <div class="status-value">
+                            <span id="last-update">-</span>
+                        </div>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Uptime:</span>
+                        <div class="status-value">
+                            <span id="uptime-display">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Positions Table -->
+        <div class="card" style="margin-bottom: 2rem;">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <span>💼</span> Open Positions
+                </h2>
+            </div>
+            <table class="positions-table" id="positions-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Entry Price</th>
+                        <th>Current Price</th>
+                        <th>Size</th>
+                        <th>Unrealized PnL</th>
+                        <th>PnL %</th>
+                    </tr>
+                </thead>
+                <tbody id="positions-body">
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                            No open positions
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Symbols Grid -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <span>🔍</span> Symbols Overview
+                </h2>
+            </div>
+            <div class="symbols-grid" id="symbols-grid"></div>
+        </div>
+    </div>
+
+    <script>
+        let equityChart;
+        let equityData = [];
+        let tradingEnabled = true; // Will be synced from backend
+        
+        // Load equity history on page load
+        async function loadEquityHistory() {
+            try {
+                const response = await fetch('/api/equity-history');
+                const data = await response.json();
+                
+                if (data.history && data.history.length > 0) {
+                    equityData = data.history.map(point => {
+                        const date = new Date(point.timestamp);
+                        return {
+                            timestamp: point.timestamp,
+                            time: date.toLocaleString('en-US', { 
+                                month: 'short', 
+                                day: 'numeric', 
+                                hour: '2-digit', 
+                                minute: '2-digit' 
+                            }),
+                            value: point.value
+                        };
+                    });
+                    
+                    // Sort by timestamp (chronological order)
+                    equityData.sort((a, b) => {
+                        return new Date(a.timestamp) - new Date(b.timestamp);
+                    });
+                    
+                    // Update chart with loaded data
+                    if (equityChart) {
+                        equityChart.data.labels = equityData.map(d => d.time);
+                        equityChart.data.datasets[0].data = equityData.map(d => d.value);
+                        equityChart.update('none');
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading equity history:', error);
+            }
+        }
+
+        // Initialize Chart
+        const ctx = document.getElementById('equityChart').getContext('2d');
+        equityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Equity',
+                    data: [],
+                    borderColor: '#6366f1',
+                    backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        backgroundColor: 'rgba(30, 41, 59, 0.9)',
+                        titleColor: '#f1f5f9',
+                        bodyColor: '#f1f5f9',
+                        borderColor: '#334155',
+                        borderWidth: 1
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        ticks: { 
+                            color: '#94a3b8',
+                            callback: function(value) {
+                                return '$' + value.toFixed(2);
+                            }
+                        },
+                        grid: { color: '#334155' }
+                    },
+                    x: {
+                        ticks: { 
+                            color: '#94a3b8',
+                            maxRotation: 45,
+                            minRotation: 45
+                        },
+                        grid: { color: '#334155' }
+                    }
+                }
+            }
+        });
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                // Update stats
+                let totalPnL = 0;
+                let totalTrades = 0;
+                let winningTrades = 0;
+                let openPositionsCount = 0;
+                let totalUnrealizedPnL = 0;
+                
+                data.symbols.forEach(s => {
+                    totalPnL += s.total_pnl || 0;
+                    totalTrades += s.total_trades || 0;
+                    winningTrades += s.win_rate ? (s.total_trades * s.win_rate / 100) : 0;
+                    if (s.position) {
+                        openPositionsCount++;
+                        totalUnrealizedPnL += s.unrealized_pnl || 0;
+                    }
+                });
+                
+                document.getElementById('total-pnl').textContent = `$${totalPnL.toFixed(2)}`;
+                document.getElementById('open-positions').textContent = openPositionsCount;
+                document.getElementById('win-rate').textContent = totalTrades > 0 ? `${((winningTrades / totalTrades) * 100).toFixed(1)}%` : '0%';
+                document.getElementById('total-trades').textContent = `${totalTrades} trades`;
+                
+                // Use total_equity from Bybit (most accurate, includes unrealized PnL)
+                // This matches what Bybit shows in their UI
+                const currentEquity = data.account?.total_equity || (data.account?.balance || 0) + totalUnrealizedPnL;
+                const accountBalance = data.account?.balance || 0;
+                
+                // Calculate starting equity (first point in history or balance - realized PnL)
+                let startingEquity = accountBalance - totalPnL;
+                if (equityData.length > 0) {
+                    startingEquity = equityData[0].value;
+                }
+                
+                document.getElementById('total-equity').textContent = `$${currentEquity.toFixed(2)}`;
+                
+                // Calculate change from starting equity
+                let equityChange = 0;
+                if (startingEquity > 0) {
+                    equityChange = ((currentEquity - startingEquity) / startingEquity * 100);
+                }
+                const equityChangeEl = document.getElementById('equity-change');
+                equityChangeEl.textContent = `${equityChange >= 0 ? '+' : ''}${equityChange.toFixed(2)}%`;
+                equityChangeEl.className = `stat-change ${equityChange >= 0 ? 'positive' : 'negative'}`;
+                
+                // Update total PnL to include unrealized
+                const totalPnLEl = document.getElementById('total-pnl');
+                const totalPnLWithUnrealized = totalPnL + totalUnrealizedPnL;
+                totalPnLEl.textContent = `$${totalPnLWithUnrealized.toFixed(2)}`;
+                const pnlChangeEl = document.getElementById('pnl-change');
+                pnlChangeEl.textContent = `${totalPnLWithUnrealized >= 0 ? '+' : ''}$${totalPnLWithUnrealized.toFixed(2)}`;
+                pnlChangeEl.className = `stat-change ${totalPnLWithUnrealized >= 0 ? 'positive' : 'negative'}`;
+                
+                // Update equity chart from backend history (single source of truth)
+                if (data.equity_history && data.equity_history.length > 0) {
+                    // Clear and rebuild equityData from backend
+                    equityData = data.equity_history.map(point => {
+                        const date = new Date(point.timestamp);
+                        return {
+                            timestamp: point.timestamp,
+                            time: date.toLocaleString('en-US', { 
+                                month: 'short', 
+                                day: 'numeric', 
+                                hour: '2-digit', 
+                                minute: '2-digit' 
+                            }),
+                            value: point.value
+                        };
+                    });
+                    
+                    // Sort by timestamp (chronological order)
+                    equityData.sort((a, b) => {
+                        return new Date(a.timestamp) - new Date(b.timestamp);
+                    });
+                    
+                    // Keep only last 500 points
+                    if (equityData.length > 500) {
+                        equityData = equityData.slice(-500);
+                    }
+                    
+                    // Update chart
+                    equityChart.data.labels = equityData.map(d => d.time);
+                    equityChart.data.datasets[0].data = equityData.map(d => d.value);
+                    equityChart.update('none');
+                } else {
+                    // No history yet - initialize with current equity if empty
+                    if (equityData.length === 0) {
+                        const now = new Date();
+                        equityData.push({
+                            timestamp: now.toISOString(),
+                            time: now.toLocaleString('en-US', { 
+                                month: 'short', 
+                                day: 'numeric', 
+                                hour: '2-digit', 
+                                minute: '2-digit' 
+                            }),
+                            value: currentEquity
+                        });
+                        
+                        equityChart.data.labels = equityData.map(d => d.time);
+                        equityChart.data.datasets[0].data = equityData.map(d => d.value);
+                        equityChart.update('none');
+                    }
+                }
+                
+                // Update trading status from backend
+                if (data.trading_enabled !== undefined) {
+                    tradingEnabled = data.trading_enabled;
+                    const statusEl = document.getElementById('trading-status');
+                    const btnEl = document.getElementById('trading-btn');
+                    if (tradingEnabled) {
+                        statusEl.textContent = 'Trading ON - Push to stop trading';
+                        btnEl.className = 'btn btn-primary';
+                    } else {
+                        statusEl.textContent = 'Trading OFF - Push to start trading';
+                        btnEl.className = 'btn btn-danger';
+                    }
+                }
+                
+                // Update bot status with live indicator
+                const botStatusIndicator = document.getElementById('bot-status-indicator');
+                const botStatusText = document.getElementById('bot-status-text');
+                const botStatusDot = botStatusIndicator.querySelector('.led-dot');
+                if (data.running) {
+                    botStatusText.textContent = 'LIVE';
+                    botStatusDot.classList.remove('off');
+                } else {
+                    botStatusText.textContent = 'STOPPED';
+                    botStatusDot.classList.add('off');
+                }
+                
+                // Update WebSocket status with live indicator
+                const wsBadge = document.getElementById('ws-status-badge');
+                const wsIndicator = document.getElementById('ws-status-indicator');
+                const wsStatusText = document.getElementById('ws-status-text');
+                const wsStatusDot = wsIndicator.querySelector('.led-dot');
+                if (data.websocket && data.websocket.connected) {
+                    wsBadge.innerHTML = `<span class="led-dot"></span><span>LIVE</span>`;
+                    wsStatusText.textContent = 'CONNECTED';
+                    wsStatusDot.classList.remove('off');
+                } else {
+                    wsBadge.innerHTML = `<span class="led-dot off"></span><span>OFFLINE</span>`;
+                    wsStatusText.textContent = 'DISCONNECTED';
+                    wsStatusDot.classList.add('off');
+                }
+                
+                // Update last update time
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+                
+                // Update uptime
+                if (data.uptime_seconds !== undefined) {
+                    lastUptimeSeconds = data.uptime_seconds;
+                    updateUptime(data.uptime_seconds);
+                }
+                
+                // Update positions table
+                updatePositionsTable(data.symbols);
+                
+                // Update symbols grid
+                updateSymbolsGrid(data.symbols);
+                
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        function updatePositionsTable(symbols) {
+            const tbody = document.getElementById('positions-body');
+            const positions = symbols.filter(s => s.position);
+            
+            if (positions.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                            No open positions
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = positions.map(s => {
+                const unrealizedPnL = s.unrealized_pnl || 0;
+                const pnlPercent = s.pnl_percent || 0;
+                const currentPrice = s.current_price ? s.current_price.toFixed(2) : '-';
+                
+                return `
+                    <tr>
+                        <td><strong>${s.symbol}</strong></td>
+                        <td><span class="badge badge-${s.position.toLowerCase()}">${s.position}</span></td>
+                        <td>$${s.entry_price?.toFixed(2) || '0.00'}</td>
+                        <td>$${currentPrice}</td>
+                        <td>${s.position_size || '0'}</td>
+                        <td class="pnl ${unrealizedPnL >= 0 ? 'positive' : 'negative'}">
+                            $${unrealizedPnL.toFixed(2)}
+                        </td>
+                        <td class="pnl ${pnlPercent >= 0 ? 'positive' : 'negative'}">
+                            ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function updateSymbolsGrid(symbols) {
+            const grid = document.getElementById('symbols-grid');
+            grid.innerHTML = symbols.map(s => {
+                // Determine main badge (BULLISH/BEARISH/NEUTRAL)
+                // NEUTRAL if EMA 200 (4H) and ST 4H are in conflict
+                let mainBadge = 'NEUTRAL';
+                let mainBadgeClass = 'badge-neutral';
+                
+                if (s.trend_4h && s.st_4h) {
+                    const emaBullish = s.trend_4h === 'BULLISH';
+                    const st4hBullish = s.st_4h === 'green';
+                    
+                    if (emaBullish && st4hBullish) {
+                        mainBadge = 'BULLISH';
+                        mainBadgeClass = 'badge-bullish';
+                    } else if (!emaBullish && !st4hBullish) {
+                        mainBadge = 'BEARISH';
+                        mainBadgeClass = 'badge-bearish';
+                    } else {
+                        mainBadge = 'NEUTRAL';
+                        mainBadgeClass = 'badge-neutral';
+                    }
+                } else if (s.trend_4h) {
+                    mainBadge = s.trend_4h;
+                    mainBadgeClass = `badge-${s.trend_4h.toLowerCase()}`;
+                }
+                
+                // Determine EMA 200 (4H) status (Bullish/Bearish) with value
+                const ema200Value = s.ema200_4h ? s.ema200_4h.toFixed(2) : 'N/A';
+                const ema200Status = s.trend_4h === 'BULLISH' ? `Bullish (${ema200Value})` : (s.trend_4h === 'BEARISH' ? `Bearish (${ema200Value})` : `N/A (${ema200Value})`);
+                const ema200Color = s.trend_4h === 'BULLISH' ? 'var(--success)' : (s.trend_4h === 'BEARISH' ? 'var(--danger)' : 'var(--text-muted)');
+                const ema200Icon = s.trend_4h === 'BULLISH' ? '📈' : (s.trend_4h === 'BEARISH' ? '📉' : '➖');
+                
+                // Determine ST 4H status with value
+                const st4hValue = s.st_4h_value ? s.st_4h_value.toFixed(2) : 'N/A';
+                const st4hStatus = s.st_4h === 'green' ? `Bullish (${st4hValue})` : (s.st_4h === 'red' ? `Bearish (${st4hValue})` : `N/A (${st4hValue})`);
+                const st4hColor = s.st_4h === 'green' ? 'var(--success)' : (s.st_4h === 'red' ? 'var(--danger)' : 'var(--text-muted)');
+                const st4hIcon = s.st_4h === 'green' ? '🟢' : (s.st_4h === 'red' ? '🔴' : '➖');
+                
+                // Determine ST 1H status with value
+                const st1hValue = s.st_1h_value ? s.st_1h_value.toFixed(2) : 'N/A';
+                const st1hStatus = s.st_1h === 'green' ? `Bullish (${st1hValue})` : (s.st_1h === 'red' ? `Bearish (${st1hValue})` : `N/A (${st1hValue})`);
+                const st1hColor = s.st_1h === 'green' ? 'var(--success)' : (s.st_1h === 'red' ? 'var(--danger)' : 'var(--text-muted)');
+                const st1hIcon = s.st_1h === 'green' ? '🟢' : (s.st_1h === 'red' ? '🔴' : '➖');
+                
+                const currentPrice = s.current_price ? s.current_price.toFixed(2) : 'N/A';
+                
+                return `
+                    <div class="symbol-card" onclick="window.location.href='/symbol/${s.symbol}'">
+                        <div class="symbol-header">
+                            <span class="symbol-name">${s.symbol}</span>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <a href="/symbol/${s.symbol}" class="symbol-chart-link" onclick="event.stopPropagation();" title="View Chart">
+                                    📊
+                                </a>
+                                <span class="badge ${mainBadgeClass}">${mainBadge}</span>
+                            </div>
+                        </div>
+                        <div class="indicator-group">
+                            <div class="indicator-row">
+                                <span><span class="indicator-icon">${ema200Icon}</span>EMA 200 (4H):</span>
+                                <span style="color: ${ema200Color}; font-weight: 600;">${ema200Status}</span>
+                            </div>
+                            <div class="indicator-row">
+                                <span><span class="indicator-icon">${st4hIcon}</span>ST 4H:</span>
+                                <span style="color: ${st4hColor}; font-weight: 600;">${st4hStatus}</span>
+                            </div>
+                        </div>
+                        <div class="indicator-group">
+                            <div class="indicator-row">
+                                <span><span class="indicator-icon">${st1hIcon}</span>ST 1H:</span>
+                                <span style="color: ${st1hColor}; font-weight: 600;">${st1hStatus}</span>
+                            </div>
+                            ${s.is_contrarian ? '<div class="signal-active">⚡ CONTRARIAN SIGNAL!</div>' : ''}
+                        </div>
+                        <div class="indicator-row" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+                            <span>Current Price:</span>
+                            <span style="font-weight: 600;">$${currentPrice}</span>
+                        </div>
+                        ${s.position ? `
+                            <div class="position-info">
+                                <div><strong>${s.position}</strong> @ $${s.entry_price?.toFixed(2)}</div>
+                                <div class="pnl ${(s.unrealized_pnl || 0) >= 0 ? 'positive' : 'negative'}" style="margin-top: 0.5rem;">${(s.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(s.unrealized_pnl || 0).toFixed(2)} (${(s.pnl_percent || 0) >= 0 ? '+' : ''}${(s.pnl_percent || 0).toFixed(2)}%)</div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function toggleTrading() {
+            const newState = !tradingEnabled;
+            
+            try {
+                const response = await fetch('/api/toggle-trading', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: newState })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    tradingEnabled = result.trading_enabled;
+                    const statusEl = document.getElementById('trading-status');
+                    const btnEl = document.getElementById('trading-btn');
+                    if (tradingEnabled) {
+                        statusEl.textContent = 'Trading ON - Push to stop trading';
+                        btnEl.className = 'btn btn-primary';
+                    } else {
+                        statusEl.textContent = 'Trading OFF - Push to start trading';
+                        btnEl.className = 'btn btn-danger';
+                    }
+                } else {
+                    console.error('Failed to toggle trading:', result.error);
+                    alert('Failed to toggle trading status');
+                }
+            } catch (error) {
+                console.error('Error toggling trading:', error);
+                alert('Error toggling trading status');
+            }
+        }
+
+
+        // Format uptime from seconds to human readable
+        function formatUptime(seconds) {
+            if (!seconds || seconds < 0) return '--';
+            
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            
+            if (days > 0) {
+                return `${days}d ${hours}h ${minutes}m`;
+            } else if (hours > 0) {
+                return `${hours}h ${minutes}m ${secs}s`;
+            } else if (minutes > 0) {
+                return `${minutes}m ${secs}s`;
+            } else {
+                return `${secs}s`;
+            }
+        }
+        
+        // Update uptime display
+        let lastUptimeSeconds = 0;
+        function updateUptime(uptimeSeconds) {
+            const uptimeEl = document.getElementById('uptime-display');
+            if (uptimeEl) {
+                uptimeEl.textContent = formatUptime(uptimeSeconds);
+            }
+        }
+        
+        // Update uptime every second (more responsive)
+        setInterval(() => {
+            if (lastUptimeSeconds > 0) {
+                lastUptimeSeconds++;
+                updateUptime(lastUptimeSeconds);
+            }
+        }, 1000);
+
+        // Initial load
+        // Load equity history first, then start auto-refresh
+        loadEquityHistory().then(() => {
+            updateStatus();
+            setInterval(updateStatus, 5000);
+        });
+    </script>
+</body>
+</html>

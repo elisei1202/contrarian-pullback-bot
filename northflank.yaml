@@ -1,0 +1,55 @@
+version: "1"
+
+services:
+  - name: contrarian-pullback-bot
+    type: service
+    build:
+      type: dockerfile
+      dockerfile: Dockerfile
+    region: eu-central-1  # Frankfurt, Germany
+    resources:
+      cpu: 0.5
+      memory: 512
+    env:
+      - name: PYTHON_VERSION
+        value: "3.11.7"
+      - name: BYBIT_API_KEY
+        secret: true
+      - name: BYBIT_API_SECRET
+        secret: true
+      - name: BYBIT_TESTNET
+        value: "false"
+      - name: SYMBOLS
+        value: "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT"
+      - name: POSITION_SIZE_USDT
+        value: "100"
+      - name: LEVERAGE
+        value: "20"
+      - name: EMA_PERIOD_4H
+        value: "200"
+      - name: ST_PERIOD_4H
+        value: "10"
+      - name: ST_MULTIPLIER_4H
+        value: "3.0"
+      - name: ST_PERIOD_1H
+        value: "10"
+      - name: ST_MULTIPLIER_1H
+        value: "3.0"
+      - name: PORT
+        value: "10000"
+      - name: CHECK_INTERVAL_SECONDS
+        value: "300"
+      - name: UPDATE_4H_HOURS
+        value: "4"
+    ports:
+      - port: 10000
+        protocol: http
+    healthCheck:
+      path: /api/status
+      interval: 30
+      timeout: 10
+      retries: 3
+    autoDeploy:
+      enabled: true
+      branch: main
+
